@@ -2,7 +2,48 @@
 
 README nói dự án này *là gì*. File này chỉ tập trung vào **làm sao chạy được trên máy bạn**.
 
-Đi lần lượt 6 bước. Bước 5 (map & toạ độ) là bước tốn công nhất — cứ làm chậm ở đó.
+> ### ⚠ Đọc dòng này trước
+>
+> **Repo chỉ chứa MÃ NGUỒN — tải về sẽ KHÔNG thấy `Manager.exe`.**
+> Bạn tự build ra nó ở **Bước 4**. Không thấy file chạy sau khi tải về là bình thường,
+> không phải thiếu file.
+
+## Làm nhanh (5 dòng)
+
+```
+1. git clone https://github.com/hoang123-123/langlatool.git
+2. Lấy jar game của mình  →  đặt tên client_modded.jar ở gốc dự án
+3. Sửa game_dir trong Injector\inject.py cho khớp thư mục game
+4. Bấm đúp build_run.bat
+5. Mở Manager\bin\Release\net8.0-windows\Manager.exe
+```
+
+Chạy được rồi thì làm tiếp **Bước 6** (map & toạ độ) — không làm thì nhân vật sẽ đứng sai chỗ.
+
+Bên dưới là chi tiết từng bước, đánh số 0 → 7. **Bước 6 tốn công nhất** — cứ làm chậm ở đó.
+
+---
+
+## Bước 0 — Tải mã nguồn về
+
+```
+git clone https://github.com/hoang123-123/langlatool.git
+cd langlatool
+```
+
+Không dùng git thì lên trang repo, bấm nút xanh **Code → Download ZIP** rồi giải nén ra một thư
+mục bất kỳ.
+
+Tải xong thư mục sẽ có đúng chừng này:
+
+```
+Injector\        Manager\        Mod\
+build_run.bat    config.mau.json doi_hinh.cfg    quest_anchors.cfg
+README.md        HUONG_DAN_SETUP.md              .gitignore
+```
+
+**Chưa có `Manager.exe`, chưa có thư mục `bin\`, chưa có `client_modded.jar`.** Ba thứ đó sinh ra
+ở Bước 2 và Bước 4.
 
 ---
 
@@ -69,9 +110,20 @@ python Injector\inject.py
 Chạy đúng thì thấy:
 
 ```
+0 Error(s)
 Modded client jar created at: ...\client_modded.jar
 Verification: Patched game client is fully ready!
 ```
+
+**Đây là bước sinh ra `Manager.exe`.** Xong bước này thì có:
+
+```
+Manager\bin\Release\net8.0-windows\Manager.exe      ← file để chạy
+lib\javassist.jar                                   ← script tự tải
+tools\ecj.jar                                       ← script tự tải
+```
+
+Hai file thư viện tự tải về từ Maven ở lần chạy đầu, không phải kiếm ở đâu cả.
 
 **Gặp lỗi thường gặp:**
 
@@ -80,6 +132,8 @@ Verification: Patched game client is fully ready!
 | `Could not copy ... Manager.exe ... being used` | Manager đang mở — đóng rồi build lại |
 | `Khong thay thu muc game` | `game_dir` ở bước 3 sai |
 | `THIEU client_modded.jar` | chưa làm bước 2 |
+| `'dotnet' is not recognized` | chưa cài .NET 8 SDK (bước 1) |
+| `'python' is not recognized` | chưa cài Python, hoặc cài rồi mà không tick "Add to PATH" |
 
 ---
 

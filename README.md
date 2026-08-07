@@ -43,6 +43,14 @@ Không cần JDK — script mượn JRE của game cộng với `ecj` (trình bi
 
 ## Cài đặt
 
+> Repo chỉ chứa **mã nguồn** — tải về chưa có `Manager.exe`, bước 3 build ra nó.
+
+### 0. Tải mã nguồn
+
+```
+git clone https://github.com/hoang123-123/langlatool.git
+```
+
 ### 1. Lấy jar gốc của game
 
 Bản này **không kèm jar game** — đó là mã của nhà phát hành, không phải mã của dự án.
@@ -97,7 +105,8 @@ bạn chơi có thể khác. Đối chiếu lại trước khi chạy thật.
 
 ## Dùng
 
-Mở `Manager.exe`, tích các nick muốn chạy rồi bấm nút.
+Build xong (bước 4 trong hướng dẫn) sẽ có `Manager\bin\Release\net8.0-windows\Manager.exe`.
+Mở nó, tích các nick muốn chạy rồi bấm nút.
 
 ### Các nút
 
