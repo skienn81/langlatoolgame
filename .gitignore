@@ -1,0 +1,59 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# REPO CÔNG KHAI — mọi thứ commit lên đây ai cũng đọc được.
+# Ba nhóm bị chặn: BÍ MẬT · MÃ CỦA GAME · THỨ TỰ SINH LẠI ĐƯỢC.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── 1. BÍ MẬT — tuyệt đối không được lên repo ──────────────────────────────
+# config.json  : mật khẩu tài khoản, để nguyên văn
+# telegram.cfg : token bot Telegram, ai có nó là chiếm được bot
+# Chặn ở MỌI thư mục (không chỉ trong bin/) phòng khi bị chép ra chỗ khác.
+config.json
+telegram.cfg
+**/config.json
+**/telegram.cfg
+
+# Ảnh chụp / log của lượt chạy thật — có thể chứa tên nhân vật, toạ độ, đồ trong túi.
+soi_map_*.log
+danh_sach_vat_pham_*.log
+*.log
+dslist_tmp.txt
+temp_path.txt
+
+# ── 2. MÃ CỦA GAME — của nhà phát hành, không phải của dự án này ───────────
+# client_modded.jar: người dùng tự lấy từ bản game mình cài (xem HUONG_DAN_SETUP.md).
+client_modded.jar
+client_modded_new.jar
+decompiled/
+decompiled_*.java
+temp_decompile/
+temp_patched/
+arr_server.beatdz
+
+# ── 3. TỰ SINH LẠI ĐƯỢC — build hoặc script tạo ra ────────────────────────
+# Thư viện: inject.py tự tải về lần chạy đầu.
+lib/javassist.jar
+tools/ecj.jar
+tools/cfr.jar
+
+# Injector.java do inject.py ghi ra mỗi lần build.
+Injector/Injector.java
+Injector/classes/
+**/classes/
+temp_classes/
+
+# Build .NET
+[Bb]in/
+[Oo]bj/
+
+# Python
+__pycache__/
+*.pyc
+
+# ── IDE / OS ───────────────────────────────────────────────────────────────
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db

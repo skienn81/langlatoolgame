@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Không sinh file .pdb: nó nhúng đường dẫn thư mục build của MÁY NGƯỜI BIÊN DỊCH vào
+         thẳng Manager.dll (kiểu "D:\cho\nao\do\Manager\obj\...\Manager.pdb"). Chia sẻ bản
+         build cho người khác thì đó là thông tin thừa. Cần số dòng trong stack trace lúc
+         gỡ lỗi thì đổi tạm dòng này thành <DebugType>portable</DebugType>. -->
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

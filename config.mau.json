@@ -1,0 +1,42 @@
+{
+  "_huong_dan": [
+    "ĐỔI TÊN FILE NÀY THÀNH config.json rồi điền tài khoản của bạn.",
+    "Username/Password là tài khoản ĐĂNG NHẬP game, không phải tên nhân vật.",
+    "Server: mở Manager, chọn server ở ô thả xuống rồi bấm ➕ — nó tự điền đúng tên.",
+    "AfkMapId: map sẽ đi treo sau khi xong việc. 0 = dùng chung ở AfkMapId ngoài cùng.",
+    "AfkZone: khu treo. 0 = để server tự xếp.",
+    "DiaCungKeyDate: để trống. Manager tự ghi ngày đã bấm nhận chìa.",
+    "DiaCungTier: 0 = dùng giá trị trong quest_anchors.cfg. 1=sơ 2=trung 3=cao 4=thượng.",
+    "Xoá dòng _huong_dan này đi cũng được, Manager bỏ qua khoá lạ.",
+    "FILE config.json CHỨA MẬT KHẨU — đừng commit, đừng gửi cho ai."
+  ],
+
+  "Username": "",
+  "Password": "",
+  "Server": "",
+  "GamePath": "C:\\Games\\LangLa",
+  "HideConsole": true,
+  "AfkMapId": 74,
+  "AfkZone": 0,
+
+  "Accounts": [
+    {
+      "Username": "tai_khoan_1",
+      "Password": "mat_khau_1",
+      "Server": "",
+      "AfkMapId": 79,
+      "AfkZone": 0,
+      "DiaCungKeyDate": "",
+      "DiaCungTier": 0
+    },
+    {
+      "Username": "tai_khoan_2",
+      "Password": "mat_khau_2",
+      "Server": "",
+      "AfkMapId": 79,
+      "AfkZone": 0,
+      "DiaCungKeyDate": "",
+      "DiaCungTier": 0
+    }
+  ]
+}
