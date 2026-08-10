@@ -88,22 +88,49 @@ Lệnh nào báo `is not recognized` nghĩa là **chưa cài** hoặc **cài r�
 
 ---
 
-## Bước 2 — Lấy jar gốc của game
+## Bước 2 — Lấy `client_modded.jar`
 
-Bản này **không kèm file jar của game** vì đó là mã của nhà phát hành.
+Đây là **chỗ tắc của mọi người**, và cũng là giới hạn thật của dự án — đọc hết mục này trước khi
+mất công thử.
 
-Trong thư mục cài game, tìm file `.jar` có chứa lớp `com.beatdz.langlalau.DesktopLauncher`.
-Một số bản đóng gói nó bên trong file `.exe` khởi chạy — file `.exe` đó thực chất là một file nén,
-đổi đuôi thành `.zip` rồi giải nén ra là thấy.
+Repo **không kèm file này**: nó chứa mã client của nhà phát hành, không phải mã của dự án.
 
-Chép file jar đó vào **thư mục gốc dự án** (chỗ có `doi_hinh.cfg`) và **đặt tên
-`client_modded.jar`**:
+### Không tự bóc từ thư mục game được
 
-```bat
-copy "C:\Duong\Dan\Game\langla.jar" client_modded.jar
+Đừng mất thời gian tìm file `.jar` trong thư mục game — **không có**. Bản game hiện tại chỉ có một
+file `.exe`, và mã game nằm trong đó ở dạng **đã mã hoá**:
+
+```
+LangLa1706.exe   (vỏ launch4j)
+ └── META-INF/client.payload      ← mã game, ĐÃ MÃ HOÁ (không phải file nén)
+     com/beatdz/protect/ProtectedLauncher.class
+     com/beatdz/protect/ProtectedLauncher$PayloadClassLoader.class
+     Main-Class: com.beatdz.protect.ProtectedLauncher
 ```
 
-> Chỉ phải làm một lần. Từ lần build sau, script tự đọc và ghi đè lên chính file đó.
+`PayloadClassLoader` giải mã payload lúc chạy. Nên đổi đuôi `.exe` thành `.zip` rồi giải nén chỉ ra
+được **lớp vỏ bảo vệ**, không ra jar game. (Hướng dẫn ở các bản trước bảo làm vậy — sai, đã sửa.)
+
+### Cách lấy
+
+**Xin file `client_modded.jar` từ người đưa bạn bộ tool này.** Chép vào **thư mục gốc dự án** —
+chỗ có `doi_hinh.cfg`:
+
+```
+langlatool\
+  client_modded.jar     ← đặt ở đây
+  doi_hinh.cfg
+  quest_anchors.cfg
+  Manager\  Mod\  Injector\
+```
+
+> **Bản game phải khớp.** File jar chứa mã game của *một bản build cụ thể*, mà mod dò vào các lớp
+> đã bị làm rối tên (`a.ew`, `a.fm`, `a.z`) — tên đó đổi theo từng bản. Bản game của bạn khác bản
+> của người gửi thì nhẹ là vài tính năng trượt lặng lẽ, nặng là client lỗi hoặc server từ chối.
+> Đối chiếu tên thư mục game hai bên trước khi nghi ngờ chỗ khác.
+
+> Chỉ phải làm một lần. Từ lần build sau không đụng gì nữa — script vừa đọc vừa ghi đè lên chính
+> file đó.
 
 Nếu quên bước này, chạy build sẽ hiện:
 

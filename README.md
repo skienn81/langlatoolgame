@@ -51,14 +51,16 @@ Không cần JDK — script mượn JRE của game cộng với `ecj` (trình bi
 git clone https://github.com/hoang123-123/langlatool.git
 ```
 
-### 1. Lấy jar gốc của game
+### 1. Lấy `client_modded.jar`
 
-Bản này **không kèm jar game** — đó là mã của nhà phát hành, không phải mã của dự án.
+Repo **không kèm file này** — đó là mã của nhà phát hành, không phải mã của dự án. Và **không tự
+bóc ra từ thư mục game được**: bản game hiện tại giữ mã trong `META-INF/client.payload` đã mã hoá,
+nạp qua `com.beatdz.protect.ProtectedLauncher`, nên giải nén file `.exe` chỉ ra lớp vỏ bảo vệ.
 
-Tìm trong thư mục cài game file jar có chứa class `com.beatdz.langlalau.DesktopLauncher`.
-Một số bản đóng gói nó bên trong file `.exe` khởi chạy, giải nén ra để lấy.
+**Xin file từ người đưa bạn bộ tool**, chép vào **gốc dự án** (chỗ có `doi_hinh.cfg`).
+Bản game hai bên phải khớp — xem [HUONG_DAN_SETUP.md](HUONG_DAN_SETUP.md) Bước 2.
 
-Chép file jar đó vào **gốc dự án** và đặt tên **`client_modded.jar`**.
+Đây là giới hạn thật: bộ tool **không tự đứng một mình được**, luôn cần một file truyền tay.
 
 > Từ lần build thứ hai trở đi không phải làm gì: script vừa đọc vừa ghi đè lên chính file đó.
 
