@@ -432,6 +432,7 @@ Nhầm chỗ này là ngồi thắc mắc "sửa rồi mà sao không đổi gì
 |---|---|
 | Login báo thành công mà lưới vẫn Lv.1 | client kẹt ở màn đăng nhập. Manager tự tắt và login lại `login_thu_lai` lần |
 | Vào nhầm server | xem console client có dòng `SERVER: da chon "<tên>" <ip>:<port>` không |
+| Manager báo `❌ Không tìm thấy client_modded.jar` | Xem danh sách thư mục nó vừa in ra ngay dưới dòng đó — chép file vào **gốc dự án** (cùng chỗ `doi_hinh.cfg`). Bản Manager cũ hơn 10/08 có lỗi dò hụt một cấp nên không thấy file ở gốc: `git pull` rồi build lại, hoặc tạm chép thêm một bản vào cạnh `Manager.exe` |
 | Nhân vật đứng yên không làm gì | sai toạ độ trong `quest_anchors.cfg` — quay lại Bước 6 |
 | Nhóm cấm thuật ngồi chờ mãi | thiếu người: có nick trong nhóm chưa vào game |
 | Gom đồ bỏ qua hết mọi nick | `gom_item_ids` chưa khai mã món nào có trong túi |

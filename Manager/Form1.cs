@@ -1582,10 +1582,24 @@ namespace Manager
         /// </summary>
         private string FindClientModdedJar()
         {
-            string searchDir = AppDomain.CurrentDomain.BaseDirectory;
-            for (int i = 0; i < 5; i++)
+            // CẮT DẤU '\' CUỐI TRƯỚC ĐÃ — không phải chi tiết vụn vặt, thiếu nó là hỏng hẳn.
+            //
+            // AppDomain.CurrentDomain.BaseDirectory LUÔN kết thúc bằng '\', mà
+            // Directory.GetParent(@"...\net8.0-windows\") trả về @"...\net8.0-windows" chứ không
+            // phải thư mục cha. Lượt đầu vì thế chỉ gỡ dấu gạch, lượt hai kiểm lại đúng thư mục
+            // vừa kiểm ⇒ cháy mất một lượt, vòng dò 5 cấp thật ra chỉ với tới `Manager\` và
+            // KHÔNG BAO GIỜ tới gốc dự án — đúng chỗ người dùng được bảo là hãy đặt file vào.
+            //
+            // Trước đây lỗi này bị che bởi một đường dẫn cứng trỏ về máy người viết, nên chạy ở
+            // đó thì tốt còn máy người khác thì "Không tìm thấy file client_modded.jar!" trong
+            // khi file nằm sờ sờ ở gốc dự án.
+            string searchDir = AppDomain.CurrentDomain.BaseDirectory
+                                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var daDo = new List<string>();
+            for (int i = 0; i < 6; i++)
             {
                 string candidate = Path.Combine(searchDir, "client_modded.jar");
+                daDo.Add(searchDir);
                 if (File.Exists(candidate))
                     return candidate;
                 var parent = Directory.GetParent(searchDir);
@@ -1593,8 +1607,12 @@ namespace Manager
                 searchDir = parent.FullName;
             }
 
-            // Không thấy thì trả null — người gọi báo lỗi rõ ràng. Không dò thêm ở đường dẫn
-            // cố định nào cả: đoán bừa một chỗ rồi mở nhầm bản jar cũ còn khó truy hơn.
+            // Không thấy thì KỂ RA đã dò ở đâu. Không dò thêm ở đường dẫn cố định nào cả: đoán
+            // bừa một chỗ rồi mở nhầm bản jar cũ còn khó truy hơn là báo không thấy. Nhưng "không
+            // thấy" mà không nói đã tìm ở đâu thì người dùng chỉ còn nước đoán.
+            Log("❌ Không tìm thấy client_modded.jar. Đã dò các thư mục:");
+            foreach (var d in daDo) Log($"     {d}");
+            Log("   → Chép file vào GỐC DỰ ÁN (cùng chỗ với doi_hinh.cfg) rồi bấm lại.");
             return null;
         }
 
