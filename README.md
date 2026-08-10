@@ -113,10 +113,10 @@ Mở nó, tích các nick muốn chạy rồi bấm nút.
 | Nút | Làm gì |
 |---|---|
 | 🚀 Khởi chạy | Mở client và login các nick đang tích. Kẹt ở màn đăng nhập thì tự tắt client login lại. |
-| ▶ Auto nhiệm vụ | Chạy nhiệm vụ ngày: nhận, đi tới map, đánh quái, trả nhiệm vụ. |
-| 🕳 Địa cung | Nhận chìa rồi vào hầm. |
-| 💎 Tinh thạch | Đổi trang bị lấy tinh thạch ở NPC. |
-| 🎒 Gom đồ | Mọi nick đang trong game giao đồ cho một nick nhận. Tuần tự từng nick vì game khoá giao dịch 30 giây. |
+| ▶ Auto NV hằng ngày | Chạy nhiệm vụ ngày: nhận, đi tới map, đánh quái, trả nhiệm vụ. |
+| 🏯 Địa cung | Nhận chìa rồi vào hầm. |
+| 💎 Đổi tinh thạch | Đổi trang bị lấy tinh thạch ở NPC. |
+| 🎒 Gom đồ về lead | Mọi nick đang trong game giao đồ cho một nick nhận. Tuần tự từng nick vì game khoá giao dịch 30 giây. |
 | ⚔️ Cấm thuật · 🪢 Sơn cáp | Hoạt động nhóm. Trưởng nhóm đi tìm khu trống, lập nhóm, gọi thành viên. Các nhóm xuất phát ở khu lệch nhau để khỏi giẫm chân. |
 | 🏰 Ải gia tộc | Một nick mở cửa ải, mọi nick đang trong game vào theo, dồn hoả lực vào cùng một mục tiêu. |
 | 🏠 Về làng · 💀 Tắt game | |
@@ -124,7 +124,7 @@ Mở nó, tích các nick muốn chạy rồi bấm nút.
 Mỗi nút chạy một việc, **bấm tay từng bước**. Trình tự thường dùng trong ngày:
 
 ```
-🚀 Khởi chạy → ▶ Auto nhiệm vụ → 🏯 Địa cung → 💎 Tinh thạch → 🎒 Gom đồ
+🚀 Khởi chạy → ▶ Auto NV hằng ngày → 🏯 Địa cung → 💎 Đổi tinh thạch → 🎒 Gom đồ
 rồi tuỳ lúc: ⚔️ Cấm thuật · 🪢 Sơn cáp · 🏰 Ải gia tộc
 ```
 
@@ -140,9 +140,28 @@ nhóm sau — nút 🚀 Khởi chạy đếm số client đang mở và chặn n
 chỗ (ai đang làm gì, tới đâu, đưa/nhận món gì, thuộc team nào), cộng tin rời cho mỗi lượt giao
 đồ và lỗi cần người can thiệp.
 
-`chat_id` không phải tự tìm — nhắn cho bot một câu là Manager tự dò rồi ghi vào file.
+File `telegram.cfg` **không có sẵn trong repo** — Manager tự sinh mẫu (token rỗng) ở
+`Manager\bin\Release\net8.0-windows\` ngay lần chạy đầu. `chat_id` cũng không phải tự tìm: nhắn
+cho bot một câu là Manager tự dò rồi ghi vào file.
 
 Để trống token thì tính năng tắt lặng lẽ, mọi thứ khác chạy y như cũ.
+
+### Gỡ bùa uế thổ từ xa
+
+Đường **hai chiều** duy nhất của tool — mọi thứ còn lại chỉ bắn tin đi.
+
+Người chơi khác yểm "bùa uế thổ" lên nick bạn thì nhân vật chết và không tự hồi sinh được cho tới
+khi có người nhập đúng mã captcha — **bùa không tự hết**, chỉ nhập đúng mã hoặc tắt hẳn client mới
+thoát. Mà nick nằm chết thì không sinh sự kiện nào: trên bảng theo dõi nó im hệt nick đang cày
+ngon, không có tin báo thì cả buổi không ai biết.
+
+Mod chụp bảng captcha rồi đẩy ảnh lên Telegram; bạn **reply chính tin ảnh đó** bằng mã trong ảnh;
+Manager gõ hộ vào ô trong game. Định tuyến bằng `message_id` của tấm ảnh nên không phải gõ tên
+nick, và hai nick dính bùa cùng lúc cũng không lẫn.
+
+Tool **không giải ảnh** — nó làm bàn phím nối dài cho người thật, không làm cái đầu.
+
+Chi tiết cách dùng và ý nghĩa từng tin: [HUONG_DAN_SETUP.md](HUONG_DAN_SETUP.md) mục 8.4.
 
 ---
 
@@ -165,6 +184,8 @@ quest_anchors.cfg   ID map, toạ độ NPC, mã vật phẩm
 
 Mod đọc `quest_anchors.cfg` lúc khởi động, nên sửa file đó xong phải **đóng hẳn client rồi mở
 lại** mới ăn. `doi_hinh.cfg` thì Manager đọc lại mỗi lần bấm nút, sửa xong dùng ngay.
+
+Bảng đầy đủ "sửa gì thì build lại gì" nằm ở [HUONG_DAN_SETUP.md](HUONG_DAN_SETUP.md).
 
 ---
 

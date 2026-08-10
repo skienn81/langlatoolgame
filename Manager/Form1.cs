@@ -4994,6 +4994,57 @@ namespace Manager
                                 continue;
                             }
 
+                            // ── bua_ue_tho: nick bị người chơi khác khoá lại bằng bảng captcha ──
+                            // Tin này phải đi NGAY và không đi chung cổng với tin lỗi: đây không
+                            // phải lỗi của tool, mà tắt nhầm nó thì nick nằm chết VÔ THỜI HẠN —
+                            // bùa không tự tan, chỉ nhập đúng mã (hoặc tắt hẳn client) mới thoát.
+                            // Kết quả NHẬP MÃ. Trước đây gói này rơi vào hư không: mod báo đầy đủ
+                            // "đã ghi vào trường nào, gọi hàm nào, hỏng ra sao" mà Manager không
+                            // bắt, nên nhìn từ ngoài chỉ thấy "mã vào ô rồi đứng im" — không có
+                            // cách nào biết là không tìm thấy hàm hay gọi rồi mà hỏng.
+                            // Mã sai / bỏ cuộc. Gõ sai là chuyện thường vì captcha cố tình khó đọc
+                            // (I hoa với l thường, 0 với O). Game giữ nguyên mã cũ nên chỉ cần báo
+                            // để người dùng đọc lại tấm ảnh CŨ và reply tiếp — không gửi ảnh mới.
+                            if (data.TryGetValue("type", out var typeBuaS)
+                                && (typeBuaS.ToString() == "bua_ue_tho_sai"
+                                    || typeBuaS.ToString() == "bua_ue_tho_bo"))
+                            {
+                                string user = data.TryGetValue("username", out var uBS) ? uBS.ToString() : Username;
+                                string detail = data.TryGetValue("detail", out var dBS) ? dBS.ToString() : "";
+                                _mainForm.TeleBuaSaiMa(user, detail, typeBuaS.ToString() == "bua_ue_tho_bo");
+                                continue;
+                            }
+
+                            if (data.TryGetValue("type", out var typeBuaN)
+                                && typeBuaN.ToString() == "bua_ue_tho_nhap")
+                            {
+                                string user = data.TryGetValue("username", out var uBN) ? uBN.ToString() : Username;
+                                string detail = data.TryGetValue("detail", out var dBN) ? dBN.ToString() : "";
+                                _mainForm.Log($"🧿⌨️ [{user}] {detail}");
+                                continue;
+                            }
+
+                            if (data.TryGetValue("type", out var typeBua)
+                                && (typeBua.ToString() == "bua_ue_tho" || typeBua.ToString() == "bua_ue_tho_het"))
+                            {
+                                string user = data.TryGetValue("username", out var uBua) ? uBua.ToString() : Username;
+                                string detail = data.TryGetValue("detail", out var dBua) ? dBua.ToString() : "";
+                                // Có kèm ảnh thì đi đường ảnh: đẩy lên Telegram để người dùng đọc
+                                // và reply mã. Không có ảnh thì vẫn báo — biết mà vào game gõ tay
+                                // còn hơn không biết gì.
+                                byte[] png = null;
+                                if (data.TryGetValue("anh", out var aBua))
+                                {
+                                    try { png = Convert.FromBase64String(aBua.ToString()); }
+                                    catch { png = null; }
+                                }
+                                if (png != null && png.Length > 0)
+                                    _mainForm.TeleBuaCaptcha(user, detail, png);
+                                else
+                                    _mainForm.TeleBuaUeTho(user, detail, typeBua.ToString() == "bua_ue_tho");
+                                continue;
+                            }
+
                             // ── cam_thuat_progress: mốc tiến trình gom nhóm ──
                             if (data.TryGetValue("type", out var typeCtP) && typeCtP.ToString() == "cam_thuat_progress")
                             {
@@ -5541,17 +5592,31 @@ namespace Manager
             }
         }
 
-        public void SendRawJson(string json)
+        /// <summary>
+        /// Gửi một dòng JSON xuống client. TRẢ VỀ false nếu không ghi được.
+        ///
+        /// Trước đây hàm này trả void và nuốt lỗi vào `Console.WriteLine` — mà Manager chạy dạng
+        /// WinForms thì không ai thấy Console. Hậu quả không phải "mất một lệnh": nó làm chỗ gọi
+        /// TƯỞNG đã gửi xong. Đường nhập mã bùa uế thổ vì thế báo lên Telegram "đã gõ mã vào
+        /// game" kể cả khi socket đã đứt — người dùng đọc dòng đó rồi ngồi chờ một việc không hề
+        /// xảy ra, trong khi nick nằm chết vô thời hạn (bùa KHÔNG tự hết).
+        ///
+        /// Trả bool chứ không ném: 40+ chỗ gọi khác đều là lệnh "gửi được thì tốt", không chỗ nào
+        /// chịu nổi một ngoại lệ bay ra giữa vòng xử lý gói. Chỗ nào cần chắc thì tự hỏi kết quả.
+        /// </summary>
+        public bool SendRawJson(string json)
         {
             try
             {
                 byte[] bytes = Encoding.UTF8.GetBytes(json);
                 _stream.Write(bytes, 0, bytes.Length);
                 _stream.Flush();
+                return true;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[TCP] SendRawJson error: {ex.Message}");
+                return false;
             }
         }
 

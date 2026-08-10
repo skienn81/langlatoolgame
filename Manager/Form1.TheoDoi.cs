@@ -64,6 +64,12 @@ namespace Manager
 
             _ = _tele.KiemTraAsync();
 
+            // ĐỌC TIN TRẢ LỜI TỪ NHÓM — đường về, trước bản này Manager chỉ biết gửi đi.
+            // Chỉ dùng cho một việc: người dùng reply mã captcha vào tin ảnh bùa uế thổ. Định
+            // tuyến bằng chính message_id của tin ảnh nên không cần gõ tên nick, và hai nick dính
+            // bùa cùng lúc cũng không lẫn.
+            _tele.BatDauDocTraLoi((replyToId, text) => NhanMaCaptchaTuTele(replyToId, text));
+
             if (cf.BangTrangThai)
             {
                 _teleTimer = new System.Windows.Forms.Timer { Interval = Math.Max(5, cf.BangGiay) * 1000 };
@@ -209,6 +215,191 @@ namespace Manager
         {
             if (_tele == null || !_tele.Bat || !_tele.CauHinh.TinLoi) return;
             _tele.Gui($"❌ {htmlNoiDung}");
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // BÙA UẾ THỔ — người chơi khác khoá nick lại bằng một bảng captcha
+        // ══════════════════════════════════════════════════════════════════
+        //
+        // Bùa KHÔNG tự hết: đã dính là nick nằm chết tới khi có người nhập đúng mã captcha,
+        // hoặc tới khi tắt hẳn client. ("5 phút" là hạn dùng của lá bùa bên kẻ yểm, không phải
+        // hạn chịu của nạn nhân.) Mà nằm chết thì KHÔNG sinh gói sự kiện nào — trên bảng theo
+        // dõi nó im hệt nick đang cày ngon. Cả cơ chế ở đây tồn tại để rút ngắn đường từ "game
+        // dựng bảng captcha" tới "người thật đọc được mã", vì không ai rút hộ được.
+        //
+        // Tool KHÔNG giải ảnh. Nó chuyển ảnh cho người thật xem rồi gõ hộ câu trả lời của người
+        // đó — làm bàn phím nối dài, không làm cái đầu.
+
+        /// <summary>
+        /// Tên hiện trên Telegram: tên nhân vật nếu đã biết, không thì username.
+        /// Người xem nhớ tên nhân vật chứ không nhớ username.
+        /// </summary>
+        private string TenHienThi(string username)
+        {
+            if (string.IsNullOrEmpty(username)) return "";
+            string ch = GetCharName(username);
+            return ch.Length > 0 ? ch : username;
+        }
+
+        // message_id của tin ẢNH captcha -> (nick, lúc gửi). Đây là toàn bộ cơ chế định tuyến:
+        // người dùng reply vào tin nào thì mã đó thuộc nick ấy, không cần gõ tên, hai nick dính
+        // bùa cùng lúc cũng không lẫn.
+        //
+        // GIỮ MỤC CHỜ SAU KHI ĐÃ NHẬN MỘT MÃ, không xoá ngay. Bản đầu xoá ngay với lý do "một mã,
+        // một lần bấm" — nhưng đo thật cho thấy gõ sai thì game GIỮ NGUYÊN mã cũ và chỉ hiện
+        // "Mã captcha không chính xác". Nghĩa là đường sửa sai đúng đắn là đọc lại chính tấm ảnh
+        // đó rồi reply tiếp; mà mục chờ đã bị xoá thì reply lần hai rơi vào hư không — người dùng
+        // hết cách, phải vào game gõ tay. Xoá khi bùa được GIẢI, không phải khi nhận mã.
+        private readonly Dictionary<int, (string User, DateTime Luc)> _buaChoMa =
+            new Dictionary<int, (string, DateTime)>();
+
+        /// <summary>Bỏ mọi mục chờ của một nick — gọi khi nick đó đã giải bùa hoặc đã bỏ cuộc.</summary>
+        private void DonChoMaCuaNick(string user)
+        {
+            foreach (var k in _buaChoMa.Where(x =>
+                         string.Equals(x.Value.User, user, StringComparison.OrdinalIgnoreCase))
+                     .Select(x => x.Key).ToList())
+                _buaChoMa.Remove(k);
+        }
+
+        /// <summary>
+        /// Nick bị yểm VÀ đọc được ảnh captcha → đẩy ảnh lên nhóm, chờ người dùng reply mã.
+        ///
+        /// Tool không giải ảnh. Nó chuyển ảnh cho người thật xem rồi gõ hộ câu trả lời của người
+        /// đó — làm bàn phím nối dài, không làm cái đầu.
+        /// </summary>
+        internal void TeleBuaCaptcha(string user, string noiDung, byte[] png)
+        {
+            if (InvokeRequired) { BeginInvoke(new Action(() => TeleBuaCaptcha(user, noiDung, png))); return; }
+            string ten = TenHienThi(user);
+            Log($"🧿 [{user}] BỊ YỂM BÙA UẾ THỔ — {noiDung} (ảnh {png.Length} byte)");
+            if (_tele == null || !_tele.Bat) return;
+
+            string caption = $"🧿 <b>{TelegramBot.Esc(ten)}</b> bị yểm <b>bùa uế thổ</b>"
+                           + $"\n<i>{TelegramBot.Esc(CatNgan(noiDung, 150))}</i>"
+                           + "\n\n<b>Trả lời (reply) tin này bằng mã trong ảnh.</b>"
+                           + "\n<i>Bùa KHÔNG tự hết: không nhập mã thì nick nằm chết mãi,"
+                           + " trừ khi tắt hẳn client. Gõ sai cứ reply lại — mã không đổi.</i>";
+            _ = Task.Run(async () =>
+            {
+                int id = await _tele.GuiAnhLayIdAsync(png, caption);
+                if (id > 0)
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        // Dọn mục QUÁ CŨ — 24 giờ, không phải 8 phút.
+                        //
+                        // Bản đầu để 8 phút vì tưởng bùa tự hết sau 5 phút. SAI: bùa yểm rồi thì
+                        // nạn nhân đứng đó tới khi có người nhập đúng mã, không có đồng hồ nào
+                        // đếm ngược cả — chỉ tắt hẳn client mới thoát. Nên một nick dính bùa lúc
+                        // 8h sáng mà 9h mới có người rảnh đọc ảnh vẫn phải reply được. Dọn 8
+                        // phút là tự tay cắt đúng đường cứu duy nhất, mà lại cắt LẶNG LẼ (reply
+                        // rơi vào nhánh TryGetValue trượt rồi return, không một dòng log).
+                        //
+                        // 24 giờ vì Telegram cũng chỉ giữ bản cập nhật chừng đó — quá hạn thì
+                        // reply có gõ cũng không tới nơi được nữa. Vẫn đủ chặn phình bộ nhớ:
+                        // đường bình thường đã xoá mục lúc bùa được giải (bua_ue_tho_het), ở đây
+                        // chỉ còn lại mấy mục mồ côi vì client bị tắt cứng.
+                        foreach (var k in _buaChoMa
+                                     .Where(x => (DateTime.Now - x.Value.Luc).TotalHours > 24)
+                                     .Select(x => x.Key).ToList())
+                            _buaChoMa.Remove(k);
+                        _buaChoMa[id] = (user, DateTime.Now);
+                        Log($"🧿 [{user}] đã gửi ảnh captcha lên Telegram (tin #{id}) — chờ reply mã");
+                    }));
+                }
+                else
+                {
+                    BeginInvoke(new Action(() =>
+                        Log($"🧿⚠️ [{user}] gửi ảnh captcha THẤT BẠI — vào game nhập mã bằng tay")));
+                }
+            });
+        }
+
+        /// <summary>Người dùng reply mã trên Telegram → chuyển xuống đúng client.</summary>
+        internal void NhanMaCaptchaTuTele(int replyToId, string ma)
+        {
+            if (InvokeRequired) { BeginInvoke(new Action(() => NhanMaCaptchaTuTele(replyToId, ma))); return; }
+            if (!_buaChoMa.TryGetValue(replyToId, out var muc)) return;   // reply vào tin khác
+            string user = muc.User;
+            ma = (ma ?? "").Trim();
+            if (ma.Length == 0) return;
+            // KHÔNG xoá mục chờ ở đây — xem chú thích ở _buaChoMa. Gõ sai thì game giữ nguyên mã
+            // cũ, nên đường sửa sai là reply tiếp vào chính tin ảnh này; xoá mục là chặn mất đúng
+            // đường đó. Mục được dọn khi nick báo đã giải bùa (hoặc bỏ cuộc), và tự hết hạn sau 8'.
+            string ten = TenHienThi(user);
+            var ss = FindSession(user);
+            if (ss == null)
+            {
+                // Mục chờ VẪN GIỮ: client vào lại là reply tiếp ăn ngay, không phải gõ tay.
+                Log($"🧿⚠️ [{user}] có mã '{ma}' nhưng client đã ngắt kết nối");
+                _tele?.Gui($"🧿⚠️ <b>{TelegramBot.Esc(ten)}</b> — client đang ngắt kết nối nên chưa gõ được"
+                         + $" mã <b>{TelegramBot.Esc(ma)}</b>. Client vào lại thì reply tin ảnh đó thêm lần nữa.");
+                return;
+            }
+            // HỎI KẾT QUẢ GHI, đừng tin là xong. Socket đứt mà phiên chưa kịp bị gỡ khỏi danh
+            // sách thì FindSession vẫn trả về phiên đó — báo "đã gõ mã vào game" lúc này là nói
+            // dối người đang ngồi chờ, mà bùa thì không tự hết để cứu vãn.
+            if (!ss.SendRawJson($"{{\"command\":\"bua_ma\",\"ma\":\"{EscapeJson(ma)}\"}}\n"))
+            {
+                Log($"🧿⚠️ [{user}] GỬI HỎNG mã '{ma}' xuống client — đường truyền đứt");
+                _tele?.Gui($"🧿⚠️ <b>{TelegramBot.Esc(ten)}</b> — <b>không gửi được</b> mã"
+                         + $" <b>{TelegramBot.Esc(ma)}</b> xuống client (đường truyền đứt)."
+                         + " Reply lại, hoặc vào game gõ tay.");
+                return;
+            }
+            Log($"🧿⌨️ [{user}] nhận mã '{ma}' từ Telegram → đã gửi xuống client");
+            _tele?.Gui($"🧿⌨️ <b>{TelegramBot.Esc(ten)}</b> — đã gõ mã <b>{TelegramBot.Esc(ma)}</b> vào game");
+        }
+
+        /// <summary>
+        /// Mã vừa gửi bị server từ chối ("Mã captcha không chính xác").
+        ///
+        /// KHÔNG gửi lại ảnh: game giữ nguyên mã cũ sau khi gõ sai, nên tấm ảnh đã có ở trên vẫn
+        /// đúng — chỉ cần đọc lại rồi reply tiếp vào chính nó. Gửi thêm ảnh y hệt là làm rác nhóm
+        /// và đẩy tấm đang cần nhìn trôi lên xa.
+        ///
+        /// `nhieuLan` = đã trượt quá ngưỡng khai trong cfg. Đây là LỜI KHUYÊN, KHÔNG phải dấu
+        /// chấm hết — và đó là chỗ bản đầu làm sai: nó gọi DonChoMaCuaNick, tức xoá luôn đường
+        /// reply. Hồi đó tưởng bùa tự tan sau 5 phút nên bỏ cuộc chỉ mất nốt vài phút. Thật ra
+        /// bùa nằm đó tới khi có người nhập đúng mã, nên xoá mục chờ là TỰ TAY KHOÁ nick lại
+        /// vĩnh viễn, đúng vào lúc người dùng đang cố cứu nó. Captcha cố tình khó đọc (I hoa với
+        /// l thường, 0 với O) — trượt bốn lần là chuyện thường, không phải dấu hiệu vô vọng.
+        /// </summary>
+        internal void TeleBuaSaiMa(string user, string noiDung, bool nhieuLan)
+        {
+            if (InvokeRequired) { BeginInvoke(new Action(() => TeleBuaSaiMa(user, noiDung, nhieuLan))); return; }
+            string ten = TenHienThi(user);
+            Log($"🧿❌ [{user}] {noiDung}");
+            // KHÔNG dọn mục chờ ở đây, dù đã trượt bao nhiêu lần. Mục chỉ mất khi bùa được GIẢI.
+            if (_tele == null || !_tele.Bat) return;
+            _tele.Gui(nhieuLan
+                ? $"🧿⚠️ <b>{TelegramBot.Esc(ten)}</b> — {TelegramBot.Esc(noiDung)}"
+                  + "\n<b>Vẫn reply tiếp vào tin ảnh đó được</b> — hoặc vào game gõ cho nhanh."
+                : $"🧿❌ <b>{TelegramBot.Esc(ten)}</b> — mã sai."
+                  + " <b>Đọc lại ảnh ở trên rồi reply tiếp vào đúng tin đó</b> (mã không đổi).");
+        }
+
+        internal void TeleBuaUeTho(string user, string noiDung, bool dangBiYem)
+        {
+            string ten = TenHienThi(user);
+            if (dangBiYem)
+                Log($"🧿 [{user}] BỊ YỂM BÙA UẾ THỔ — {noiDung}");
+            else
+            {
+                Log($"🧿✅ [{user}] đã giải bùa uế thổ");
+                DonChoMaCuaNick(user);   // hết bị yểm thì mục chờ hết ý nghĩa
+            }
+
+            if (_tele == null || !_tele.Bat) return;
+            if (dangBiYem)
+                _tele.Gui($"🧿 <b>{TelegramBot.Esc(ten)}</b> bị yểm <b>bùa uế thổ</b>"
+                          + " — nằm chết tới khi nhập captcha"
+                          + $"\n<i>{TelegramBot.Esc(CatNgan(noiDung, 150))}</i>"
+                          + "\n<i>Không đọc được ảnh captcha nên KHÔNG reply được ở đây."
+                          + " Bùa không tự hết — phải vào game nhập mã, hoặc tắt hẳn client.</i>");
+            else
+                _tele.Gui($"🧿✅ <b>{TelegramBot.Esc(ten)}</b> đã giải bùa uế thổ");
         }
 
         internal void TeleBatDauGom(string nhanDo, int soMem)

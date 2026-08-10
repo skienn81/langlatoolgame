@@ -255,6 +255,137 @@ tin_loi          = 1
         }
 
         /// <summary>
+        /// Gửi ẢNH captcha lên nhóm và trả về message_id của tin đó.
+        ///
+        /// message_id là mấu chốt của cả cơ chế trả lời: người dùng REPLY vào đúng tin này, và
+        /// Telegram kèm `reply_to_message.message_id` trong bản cập nhật ⇒ Manager biết mã vừa gõ
+        /// là của nick nào mà KHÔNG cần người dùng gõ tên. Hai nick dính bùa cùng lúc cũng không
+        /// lẫn được.
+        ///
+        /// Reply cũng là cách né privacy mode: bot trong nhóm mặc định chỉ nhận được lệnh /xxx và
+        /// tin trả lời chính nó. Dùng reply thì khỏi phải vào BotFather tắt privacy.
+        ///
+        /// Đi thẳng, KHÔNG qua hàng đợi 3.2 giây của tin thường: nick đang nằm chết chờ tấm ảnh
+        /// này, và nó nằm cho tới khi có người nhập đúng mã chứ không có đồng hồ nào đếm ngược.
+        /// </summary>
+        public async Task<int> GuiAnhLayIdAsync(byte[] png, string caption)
+        {
+            if (!_cf.Bat || png == null || png.Length == 0) return -1;
+            try
+            {
+                using (var form = new MultipartFormDataContent())
+                {
+                    form.Add(new StringContent(_cf.ChatId), "chat_id");
+                    form.Add(new StringContent(caption ?? ""), "caption");
+                    form.Add(new StringContent("HTML"), "parse_mode");
+                    var anh = new ByteArrayContent(png);
+                    anh.Headers.ContentType =
+                        new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+                    form.Add(anh, "photo", "captcha.png");
+
+                    var rep = await _http.PostAsync(
+                        $"https://api.telegram.org/bot{_cf.Token}/sendPhoto", form, _dung.Token);
+                    string body = await rep.Content.ReadAsStringAsync();
+                    if (!rep.IsSuccessStatusCode)
+                    {
+                        _log($"⚠ Telegram sendPhoto {(int)rep.StatusCode}: {Gon(body)}");
+                        return -1;
+                    }
+                    using (var doc = JsonDocument.Parse(body))
+                    {
+                        if (doc.RootElement.TryGetProperty("result", out var r)
+                            && r.TryGetProperty("message_id", out var mid))
+                            return mid.GetInt32();
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { _log($"⚠ Telegram sendPhoto lỗi: {ex.Message}"); }
+            return -1;
+        }
+
+        // Vòng đọc đang hỏng liên tiếp mấy nhịp. Kêu lần đầu và lúc khỏi, không kêu mỗi 2 giây.
+        private int _docLoiDem;
+
+        /// <summary>
+        /// Vòng ĐỌC tin trả lời từ nhóm. Trước bản này Manager chỉ biết gửi.
+        ///
+        /// Nhịp phải DÀY (2 giây) chứ không thưa như tin gửi đi: mỗi giây trễ ở đây là một giây
+        /// nick nằm chết thêm, mà bùa uế thổ không tự tan — nó nằm tới khi có người nhập đúng mã.
+        /// Poll 30 giây thì mọi thứ khác chạy đúng mà người dùng vẫn thấy nó ì ra.
+        ///
+        /// `offset` phải giữ và luôn tiến: Telegram trả lại y nguyên các bản cập nhật chưa được
+        /// xác nhận, không giữ offset là mỗi vòng lại xử lý lại đúng tin cũ.
+        /// </summary>
+        public void BatDauDocTraLoi(Action<int, string> khiCoTraLoi)
+        {
+            if (!_cf.Bat || khiCoTraLoi == null) return;
+            _ = Task.Run(async () =>
+            {
+                long offset = 0;
+                while (!_dung.IsCancellationRequested)
+                {
+                    try
+                    {
+                        var rep = await _http.GetAsync(
+                            $"https://api.telegram.org/bot{_cf.Token}/getUpdates"
+                            + $"?offset={offset}&timeout=0&allowed_updates=[\"message\"]",
+                            _dung.Token);
+                        if (rep.IsSuccessStatusCode)
+                        {
+                            using (var doc = JsonDocument.Parse(await rep.Content.ReadAsStringAsync()))
+                            {
+                                if (doc.RootElement.TryGetProperty("result", out var arr))
+                                {
+                                    foreach (var up in arr.EnumerateArray())
+                                    {
+                                        if (up.TryGetProperty("update_id", out var uid))
+                                            offset = uid.GetInt64() + 1;
+                                        if (!up.TryGetProperty("message", out var msg)) continue;
+                                        if (!msg.TryGetProperty("text", out var txt)) continue;
+                                        if (!msg.TryGetProperty("reply_to_message", out var rt)) continue;
+                                        if (!rt.TryGetProperty("message_id", out var rid)) continue;
+                                        khiCoTraLoi(rid.GetInt32(), txt.GetString() ?? "");
+                                    }
+                                }
+                            }
+                            if (_docLoiDem > 0)
+                            {
+                                _log($"📨 Telegram: đọc trả lời nối lại được (hỏng {_docLoiDem} nhịp).");
+                                _docLoiDem = 0;
+                            }
+                        }
+                        // 409 Conflict = có HAI chỗ cùng gọi getUpdates trên một token (mở hai
+                        // Manager chẳng hạn). Telegram chỉ giao mỗi bản cập nhật cho MỘT bên, nên
+                        // reply sẽ rơi sang bên kia rồi bị nuốt. Phải thấy được mới đoán ra.
+                        else if (++_docLoiDem == 1)
+                            _log($"⚠ Telegram getUpdates {(int)rep.StatusCode}: {await DocGon(rep)}");
+                    }
+                    // CHỈ thoát khi ĐÚNG là bị huỷ.
+                    //
+                    // HttpClient hết hạn 20 giây cũng ném TaskCanceledException, mà nó là CON của
+                    // OperationCanceledException — bắt trơn cả họ rồi `return` thì mạng chớp một
+                    // cái là luồng đọc chết hẳn, lặng lẽ, tới hết phiên.
+                    //
+                    // Đo thật 10/08: khoảng 08:11 mạng hỏng một nhịp. 08:19 gửi ảnh captcha của
+                    // [katarina] vẫn lên bình thường (luồng GỬI có đường thử lại riêng, còn báo
+                    // "nối lại được"), nhưng hai lần reply mã thì không ai nhặt — và không một
+                    // dòng log nào nói vì sao. Cái đắt không phải là hỏng, mà là hỏng KHÔNG KÊU.
+                    catch (OperationCanceledException) when (_dung.IsCancellationRequested) { return; }
+                    catch (Exception ex)
+                    {
+                        // Kêu MỘT lần rồi im: mất mạng 10 phút là 300 nhịp, kêu hết thì lấp log.
+                        if (++_docLoiDem == 1)
+                            _log($"⚠ Telegram: đọc trả lời lỗi — {Gon(ex.Message)}"
+                               + " (tự thử lại mỗi 2 giây, KHÔNG chết luồng)");
+                    }
+                    try { await Task.Delay(2000, _dung.Token); } catch { return; }
+                }
+                _log("⚠ Telegram: vòng đọc trả lời đã dừng — reply mã captcha sẽ không còn tác dụng.");
+            });
+        }
+
+        /// <summary>
         /// Cập nhật BẢNG theo dõi: gửi lần đầu, các lần sau sửa đúng tin đó.
         /// Nội dung không đổi thì không gọi API — Telegram trả lỗi "message is not modified"
         /// và mỗi lần gọi thừa đều ăn vào hạn mức.

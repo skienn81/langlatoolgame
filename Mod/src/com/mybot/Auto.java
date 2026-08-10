@@ -1412,6 +1412,16 @@ public class Auto {
             } catch (Exception e) {
                 System.out.println("[MyBot] cam_thuat_goto error: " + e.getMessage());
             }
+        } else if (line.contains("\"command\":\"bua_ma\"")) {
+            // Mã captcha do NGƯỜI DÙNG gõ trên Telegram, Manager chuyển xuống. Tool chỉ gõ hộ vào
+            // ô — nó không đọc ảnh, không giải gì cả.
+            try {
+                String ma = parseStringParam(line, "ma", "");
+                System.out.println("[MyBot] Bua ue tho (nhap ma): "
+                        + TaskManager.getInstance().nhapMaCaptcha(ma));
+            } catch (Exception e) {
+                System.out.println("[MyBot] bua_ma error: " + e.getMessage());
+            }
         } else if (line.contains("\"command\":\"cam_thuat_zone_full\"")) {
             // Manager chuyển tiếp: một member không chen được vào khu của trưởng nhóm (khu đầy
             // người). Trưởng nhóm dời sang khu khác rồi báo lại khu mới.

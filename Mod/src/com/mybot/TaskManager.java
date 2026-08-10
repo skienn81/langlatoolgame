@@ -1979,6 +1979,11 @@ public class TaskManager {
         }
     }
 
+    /** Map hiện tại, -1 nếu chưa đọc được. Bản không ném của getCurrentMapId(). */
+    public int getMapAnToan() {
+        try { return getCurrentMapId(); } catch (Exception e) { return -1; }
+    }
+
     /** KHU hiện tại đang đứng (z.v). -1 nếu chưa đọc được. */
     public int getCurrentZoneId() {
         try {
@@ -8729,6 +8734,864 @@ public class TaskManager {
         }
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // BÙA UẾ THỔ — người chơi khác khoá nick mình lại bằng một bảng captcha
+    // ══════════════════════════════════════════════════════════════════════
+    //
+    // Vật phẩm mã 617 "Bùa uế thổ": yểm lên đối phương, đối phương KHÔNG được tự hồi sinh hay
+    // về thành cho tới khi có người nhập đúng mã captcha. Mỗi lá chỉ tác dụng lên một người.
+    //
+    // KHÔNG CÓ ĐỒNG HỒ ĐẾM NGƯỢC. Con số "5 phút" là hạn dùng của lá bùa bên phía kẻ yểm, không
+    // phải hạn chịu đựng của nạn nhân: đã dính rồi thì nick nằm đó tới khi có người nhập đúng
+    // mã, hoặc tới khi tắt hẳn client. Nhầm chỗ này là nhầm cả mức nghiêm trọng của mọi đường
+    // hỏng bên dưới — "chờ 5 phút là xong" với "nằm chết tới sáng mai" là hai chuyện khác hẳn.
+    //
+    // VÌ SAO TOOL PHẢI BIẾT — và đây mới là phần đắt, không phải bốn ký tự kia:
+    // nick nằm chết không sinh ra gói sự kiện nào, nó im hệt nick đang đánh ngon. Trong khi đó
+    // máy trạng thái của hoạt động vẫn đếm hạn rồi bắn ra "het gio o buoc N" ⇒ một dòng log đổ
+    // lỗi sai chỗ, và lượt đang chạy bị bỏ dở vì tool tự kết luận hỏng. Đúng kiểu đã mất cả
+    // buổi để truy với câu "khong thay NPC Raikage" hôm 08/08: câu log đổ lỗi cho NPC trong khi
+    // lỗi thật là đứng nhầm map.
+    //
+    // NHẬN BIẾT ĐƯỢC LÀ VÌ CHUỖI NẰM Ở CLIENT: câu "đã yểm bùa uế thổ, nhập mã đã giải trừ bùa
+    // chú" nằm trong bảng hằng chữ com/c/a/a.class — client tự dựng chứ không phải server đẩy
+    // xuống, nên readAnyDialogText() đọc ra được. (Đối chiếu: "Khoảng cách quá xa" của giao
+    // dịch KHÔNG có trong bất kỳ lớp nào ⇒ câu đó do server gửi, không dò kiểu này được.)
+    //
+    // Câu của game có kèm TÊN KẺ YỂM, nên báo về là biết luôn ai làm.
+    private long buaKiemKe = 0;
+    private boolean buaDangDinh = false;
+    private long buaBangMoTu = 0;      // bảng lạ hiện từ lúc nào (để dump khi nó nằm lì)
+    private long buaDumpKe = 0;        // chặn dump liên tục
+    private long buaGuiLuc = 0;        // lúc gửi mã lên server; >0 = đang chờ xem có qua không
+    private int  buaLanThu = 0;        // lần gửi ảnh thứ mấy trong cùng một lượt bị yểm
+
+    /**
+     * Chụp ảnh captcha đang hiện rồi đẩy về Manager. Dùng cho CẢ lần đầu lẫn các lần gõ sai.
+     *
+     * Gộp làm một chỗ vì hai đường đó phải giống hệt nhau: lần gõ sai mà gửi thiếu ảnh thì người
+     * dùng không có gì để đọc, còn gửi ảnh cũ thì càng tệ — server đã đổi mã, nhìn ảnh cũ gõ lại
+     * là sai tiếp.
+     */
+    private void guiAnhCaptcha(String noiDung, int lanThu) {
+        Object bang = timBangCaptcha();
+        byte[] png = anhCaptchaPng(bang);
+        String kem = (lanThu > 1) ? (" (lan " + lanThu + ")") : "";
+        if (png != null && png.length > 0) {
+            // java.util.Base64 chứ không javax.xml.bind.DatatypeConverter: cái sau nằm trong JAXB,
+            // có ở JRE 8 nhưng bị gỡ khỏi Java 11 — dùng nó là gài sẵn một quả mìn cho ngày đổi
+            // JRE, mà lúc đó lỗi hiện ra ở đây chứ không ở chỗ đổi.
+            pushBuaAnh(noiDung + kem, java.util.Base64.getEncoder().encodeToString(png));
+            log("Bua ue tho: da gui anh captcha " + png.length + " byte len Manager" + kem);
+        } else {
+            pushBua("bua_ue_tho", noiDung + kem);
+        }
+    }
+
+    /**
+     * GOM MỌI CHỮ ĐANG HIỆN TRÊN CHỒNG BẢNG — không lọc theo lớp bảng, không lọc theo tên trường.
+     *
+     * Vì sao phải có, và đây là bài học trả giá ngay trong lần chạy thật đầu tiên:
+     * `readConfirmPopupText()` chỉ nhận bảng thuộc lớp `a.cd` và chỉ đọc đúng MỘT trường tên `w`.
+     * Bảng captcha của bùa uế thổ là lớp khác ⇒ phép dò trượt hoàn toàn, không có lấy một dòng
+     * log, trong khi popup đang sờ sờ trên màn hình.
+     *
+     * Bài học chung: dò theo HÌNH DẠNG (có trường String nào chứa cụm chữ này không) bền hơn dò
+     * theo TÊN LỚP và TÊN TRƯỜNG. Tên là thứ trình làm rối đổi được và cũng là thứ mình đoán;
+     * còn "trên màn hình đang có chữ này" là thứ quan sát được.
+     *
+     * Quét cả String[] chứ không chỉ String: chữ trong bảng thường bị cắt sẵn thành từng dòng.
+     * Quét cả lớp CHA: trường chứa chữ hay nằm ở lớp bảng gốc chứ không ở lớp con.
+     */
+    private String docMoiChuTrenBang(int gioiHan) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            if (fkFieldAn == null) return "";
+            Object zInst = getZ();
+            if (zInst == null) return "";
+            Object o = fkFieldAn.get(zInst);
+            if (!(o instanceof java.util.Vector)) return "";
+            java.util.Vector<?> stack = (java.util.Vector<?>) o;
+            java.util.IdentityHashMap<Object, Boolean> daXem =
+                    new java.util.IdentityHashMap<Object, Boolean>();
+            int[] ngan = new int[]{ getSettingInt("bua_ue_tho_so_node", 400) };
+            int sau = getSettingInt("bua_ue_tho_sau", 3);
+            for (int i = stack.size() - 1; i >= 0; i--) {
+                Object p = stack.get(i);
+                if (p == null) continue;
+                // BỎ QUA CHÍNH a.z. Nó nằm trong chồng bảng (nó cũng là một bảng), nhưng nó là cả
+                // thế giới trò chơi — Vector 90 quái, 425 phần tử, hàng chục đối tượng con. Đi vào
+                // đó là duyệt gần hết bộ nhớ game mỗi 3 giây để tìm một câu nằm ở bảng trên cùng.
+                if (p == zInst) continue;
+                gomChuTrongCay(p, daXem, sau, sb, gioiHan, ngan);
+                if (sb.length() > gioiHan) break;
+            }
+        } catch (Exception ignore) {}
+        return sb.toString();
+    }
+
+    /**
+     * ĐI VÀO CÂY WIDGET, không chỉ đọc node trên cùng.
+     *
+     * Bài học từ bản mổ 16:30 ngày 09/08: toàn bộ trường String của bảng captcha chỉ có ba cái
+     * NHÃN — 'Mã xác nhận:', 'Nhắc nhở', 'Xác nhận'. Câu thông báo thật ("… đã yểm bùa uế thổ …")
+     * không nằm ở đó mà nằm trong `a.bd.ae` — Vector chứa các widget CON của bảng. Bản đọc trước
+     * chỉ quét trường String của node trên cùng nên không thể thấy, và sẽ không bao giờ thấy dù
+     * chờ bao lâu.
+     *
+     * Bảng trong game là một CÂY, nên muốn đọc chữ trên bảng thì phải duyệt cây. Ba cái chặn để
+     * việc đó không thành duyệt cả bộ nhớ: giới hạn độ SÂU, giới hạn số NODE, và bỏ qua chính
+     * a.z. Thiếu một trong ba là mỗi 3 giây lại quét gần hết game.
+     *
+     * Dùng IdentityHashMap chứ không HashSet: các lớp của game có thể tự định nghĩa equals/hashCode
+     * theo cách bất kỳ, mà thứ cần chống ở đây là đi lại ĐÚNG MỘT đối tượng (cây widget có con
+     * trỏ ngược về cha: `a.bb.c = bd`), tức so theo danh tính chứ không theo giá trị.
+     */
+    private void gomChuTrongCay(Object o, java.util.IdentityHashMap<Object, Boolean> daXem,
+                                int sau, StringBuilder sb, int gioiHan, int[] ngan) {
+        if (o == null || sau < 0 || sb.length() > gioiHan || ngan[0] <= 0) return;
+        if (daXem.containsKey(o)) return;
+        daXem.put(o, Boolean.TRUE);
+        ngan[0]--;
+        try {
+            for (Class<?> c = o.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                Field[] fs;
+                try { fs = c.getDeclaredFields(); } catch (Throwable t) { continue; }
+                for (Field f : fs) {
+                    if (java.lang.reflect.Modifier.isStatic(f.getModifiers())) continue;
+                    if (sb.length() > gioiHan || ngan[0] <= 0) return;
+                    try {
+                        f.setAccessible(true);
+                        Object v = f.get(o);
+                        if (v == null) continue;
+                        if (v instanceof String) {
+                            String s = v.toString().trim();
+                            if (!s.isEmpty()) sb.append(s).append(" | ");
+                        } else if (v instanceof String[]) {
+                            for (String s : (String[]) v)
+                                if (s != null && !s.trim().isEmpty())
+                                    sb.append(s.trim()).append(" | ");
+                        } else if (v instanceof java.util.Vector) {
+                            java.util.Vector<?> con = (java.util.Vector<?>) v;
+                            for (int k = 0; k < con.size(); k++)
+                                gomChuTrongCay(con.get(k), daXem, sau - 1, sb, gioiHan, ngan);
+                        } else if (v.getClass().getName().startsWith("a.")
+                                && !v.getClass().isArray()) {
+                            gomChuTrongCay(v, daXem, sau - 1, sb, gioiHan, ngan);
+                        }
+                    } catch (Throwable ignore) {}
+                }
+            }
+        } catch (Throwable ignore) {}
+    }
+
+    /**
+     * Số CỬA SỔ đang mở — KHÔNG tính chính `a.z`.
+     *
+     * `z.an` luôn chứa sẵn `a.z` (bản thân màn chơi cũng là một "bảng"), nên đếm thô thì lúc nào
+     * cũng ≥ 1 và "có bảng nằm lì" thành LUÔN ĐÚNG. Hậu quả đo được lúc 18:04: hai nick không hề
+     * bị yểm vẫn mổ xẻ toàn bộ `a.z` — hàng nghìn dòng mỗi nick — đổ vào log và file soi.
+     *
+     * Bằng chứng nằm ngay trong bản dump đó: `an:Vector(1)` khi không mở gì, `an:Vector(2)` khi
+     * bảng captcha đang hiện. Trừ đi chính nó là ra đúng số cửa sổ thật.
+     */
+    private int soBangDangMo() {
+        try {
+            if (fkFieldAn == null) return 0;
+            Object zInst = getZ();
+            if (zInst == null) return 0;
+            Object o = fkFieldAn.get(zInst);
+            if (!(o instanceof java.util.Vector)) return 0;
+            java.util.Vector<?> v = (java.util.Vector<?>) o;
+            int n = 0;
+            for (int i = 0; i < v.size(); i++) {
+                Object p = v.get(i);
+                if (p != null && p != zInst) n++;
+            }
+            return n;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private void tickBuaUeTho(long now) {
+        try {
+            if (getSettingInt("bua_ue_tho_bao", 1) != 1) return;
+            if (now < buaKiemKe) return;
+            buaKiemKe = now + getSettingInt("bua_ue_tho_soi_ms", 3000);
+
+            // KHÔNG chặn theo reflectionReady ở ngoài như các máy khác: cờ đó chỉ bật khi có ai
+            // gọi initReflection, mà nick chỉ đăng nhập rồi để đó thì không ai gọi — đúng lỗi đã
+            // gặp ở tickClosePopupAfterLogin. Thử ngay tại đây, và đã bị nhịp soi 3s ghì lại nên
+            // không tốn gì.
+            if (!reflectionReady) { initReflection(); if (!reflectionReady) return; }
+
+            // ── NHẬN BIẾT BẰNG CHÍNH CÁI BẢNG, KHÔNG BẰNG CHỮ ─────────────────────────────
+            //
+            // Ba lần dính bùa liên tiếp (16:23, 16:30, 16:44 ngày 09/08) đều dựng bảng `a.ew` với
+            // `M = -44`, và bản mổ toàn cây widget KHÔNG chứa một chữ "bùa"/"yểm"/"uế thổ" nào —
+            // game lấy câu từ bảng hằng chữ lúc VẼ, không cất vào bảng. Nghĩa là khớp chữ không
+            // bao giờ ăn, dù duyệt cây sâu tới đâu. Hai vòng sửa trước đều đâm vào bức tường đó.
+            //
+            // Bảng có mặt LÀ bằng chứng, và nó còn chắc hơn chữ: chữ do người dịch đặt và đổi được
+            // giữa hai câu (đã cắn đúng chuyện đó lúc 16:23), còn lớp bảng + mã loại là thứ client
+            // dùng để dựng đúng cái hộp này.
+            //
+            // `S` KHÔNG phải ô nhập — nó giữ TÊN KẺ YỂM ('xinhghe' lúc 16:44, rỗng khi game dùng
+            // câu không kèm tên). Suýt cho ghi mã đè lên đó.
+            Object bangCt = timBangCaptcha();
+            boolean dinhBang = false;
+            String keYem = "";
+            if (bangCt != null) {
+                int maCan = getSettingInt("bua_ue_tho_ma_bang", -44);
+                int maCo = docSoTruong(bangCt, getSetting("bua_ue_tho_truong_ma", "M"), Integer.MIN_VALUE);
+                dinhBang = (maCan == Integer.MIN_VALUE) || (maCo == maCan) || (maCo == Integer.MIN_VALUE);
+                keYem = docChuoiTruong(bangCt, getSetting("bua_ue_tho_truong_ke_yem", "S"));
+            }
+
+            String chu = noAccent(getSetting("bua_ue_tho_chu", "bua ue tho")).toLowerCase();
+
+            // HAI PHÉP ĐỌC, HẸP TRƯỚC RỘNG SAU.
+            // Hẹp cho ra chữ SẠCH để bắn lên Telegram (đúng một câu). Rộng thì chắc chắn thấy
+            // nhưng trộn mọi chữ trên bảng lại. Thử hẹp trước, trượt mới dùng rộng — và lần chạy
+            // thật đầu tiên cho thấy phép hẹp trượt, nên nhánh rộng KHÔNG phải để cho vui.
+            String t = readAnyDialogText();
+            boolean dinh = dinhBang;
+            if (dinh) {
+                t = (keYem.isEmpty() ? "" : keYem + " ") + "da yem bua ue tho - can nhap captcha";
+            }
+            if (!dinh) dinh = (t != null) && noAccent(t).toLowerCase().contains(chu);
+            if (!dinh) {
+                String rong = docMoiChuTrenBang(getSettingInt("bua_ue_tho_chu_toi_da", 4000));
+                if (noAccent(rong).toLowerCase().contains(chu)) {
+                    dinh = true;
+                    // LẤY ĐÚNG MẢNH CHỨA CỤM CHỮ, không lấy cả cục.
+                    // Phép đọc rộng nối mọi trường String của mọi bảng lại bằng " | " — bắn nguyên
+                    // cục lên Telegram là một đống chữ lẫn nhãn nút, tiêu đề, chữ nền. Cắt ra đúng
+                    // mảnh có cụm chữ thì được nguyên văn câu game nói, kèm luôn tên kẻ yểm.
+                    t = rong;
+                    for (String manh : rong.split("\\|")) {
+                        if (noAccent(manh).toLowerCase().contains(chu)) { t = manh.trim(); break; }
+                    }
+                }
+            }
+
+            // LƯỚI ĐỠ: BẢNG NẰM LÌ THÌ MỔ, DÙ KHÔNG KHỚP CHỮ NÀO.
+            //
+            // Nếu chữ trên bảng captcha không nằm trong bất kỳ trường String nào (game vẽ thẳng
+            // ra màn hình chẳng hạn) thì mọi phép khớp chữ đều trượt, và cái dump — thứ DUY NHẤT
+            // gỡ được bí — lại treo vào chính phép khớp đó. Vòng luẩn quẩn: không nhận ra được
+            // thì không bao giờ có dữ liệu để học cách nhận ra.
+            //
+            // Cắt vòng đó bằng một quan sát khác hẳn: bảng nào của tool cũng được đóng trong vài
+            // giây, nên MỘT BẢNG MỞ LIÊN TỤC QUÁ LÂU tự nó đã là chuyện bất thường đáng chộp.
+            if (!dinh && getSettingInt("bua_ue_tho_dump_bang_li", 1) == 1) {
+                if (soBangDangMo() > 0) {
+                    if (buaBangMoTu == 0) buaBangMoTu = now;
+                    long li = getSettingInt("bua_ue_tho_bang_li_ms", 60000);
+                    if (now - buaBangMoTu >= li && now >= buaDumpKe) {
+                        buaDumpKe = now + getSettingInt("bua_ue_tho_dump_cach_ms", 600000);
+                        log("Bua ue tho: co bang mo li " + (li / 1000) + "s ma khong khop chu nao"
+                                + " -> mo xe de xem no la cai gi");
+                        pushScan("=== BANG NAM LI (khong khop chu) ===" + dumpBangCaptcha());
+                    }
+                } else {
+                    buaBangMoTu = 0;
+                }
+            }
+
+            if (!dinh) {
+                // BÁO CẢ LÚC HẾT. Không có tin này thì bảng theo dõi treo nick ở trạng thái "đang
+                // bị yểm" vĩnh viễn sau lần đầu — im lặng khi hết cũng sai hệt im lặng khi dính.
+                if (buaDangDinh) {
+                    buaDangDinh = false;
+                    buaGuiLuc = 0;
+                    pushBua("bua_ue_tho_het", "bang captcha da dong - da giai bua"
+                            + (buaLanThu > 1 ? " (sau " + buaLanThu + " lan gui anh)" : ""));
+                    log("Bua ue tho: bang da dong -> het bi yem");
+                    buaLanThu = 0;
+                }
+                return;
+            }
+
+            buaBangMoTu = 0;           // đã nhận ra rồi, khỏi cần lưới đỡ "bảng nằm lì"
+
+            // ── GÕ SAI MÃ THÌ GỬI LẠI ẢNH MỚI ────────────────────────────────────────────
+            //
+            // Captcha cố tình viết khó đọc: I hoa với l thường gần như y hệt nhau, 0 với O, 1 với
+            // l. Gõ sai là chuyện bình thường, không phải ngoại lệ hiếm.
+            //
+            // BẢNG CÒN Ở ĐÓ SAU KHI ĐÃ GỬI MÃ = MÃ SAI. Đây là quan sát trực tiếp, không phải suy
+            // đoán: gửi đúng thì server đóng bảng, còn bảng vẫn nằm nghĩa là nó không nhận.
+            //
+            // KHÔNG gửi lại ảnh: người dùng đã đo và cho biết game GIỮ NGUYÊN MÃ CŨ sau khi gõ
+            // sai, chỉ hiện "Mã captcha không chính xác". Gửi lại một tấm ảnh y hệt vừa vô ích
+            // vừa làm rác nhóm, và còn đẩy tấm cũ trôi lên xa.
+            //
+            // Chỗ thật sự kẹt nằm bên Manager: nó xoá mục chờ ngay khi nhận mã, nên reply lần hai
+            // vào đúng tin ảnh đó rơi vào hư không. Đã sửa để GIỮ mục chờ tới khi bùa được giải.
+            // Ở đây chỉ cần báo cho người dùng biết là trượt, để họ đọc lại tấm ảnh CŨ và reply
+            // tiếp — không cần gửi gì thêm.
+            //
+            // TRẦN `thu_lai_max` LÀ NGƯỠNG NHẮC, KHÔNG PHẢI DẤU CHẤM HẾT.
+            //
+            // Bản đầu quá trần thì `return` luôn và Manager xoá mục chờ ⇒ reply tiếp vô tác dụng.
+            // Hồi đó tưởng bùa tự tan sau 5 phút nên bỏ cuộc chỉ mất nốt vài phút. THẬT RA bùa
+            // nằm đó tới khi có người nhập đúng mã — chỉ tắt hẳn client mới thoát. Nên dừng thử
+            // lại chính là tự tay khoá nick vĩnh viễn, đúng lúc người dùng đang cố cứu nó.
+            //
+            // Trần này cũng không đổi lấy được gì: mỗi báo "sai" gắn với ĐÚNG MỘT mã người dùng
+            // vừa gửi (buaGuiLuc đặt lúc gửi, xoá lúc báo), không có nhịp tự lặp nào để mà spam.
+            if (buaDangDinh) {
+                if (buaGuiLuc > 0
+                        && now - buaGuiLuc >= getSettingInt("bua_ue_tho_cho_ket_ms", 4000)) {
+                    buaGuiLuc = 0;
+                    buaLanThu++;
+                    int tran = getSettingInt("bua_ue_tho_thu_lai_max", 4);
+                    log("Bua ue tho: gui ma xong ma bang van con -> ma SAI (lan " + buaLanThu + ")");
+                    if (tran > 0 && buaLanThu > tran) {
+                        pushBua("bua_ue_tho_bo", "da thu " + buaLanThu
+                                + " lan van chua qua captcha - reply tiep van an, hoac vao game nhap tay");
+                    } else {
+                        pushBua("bua_ue_tho_sai", "ma sai - doc lai anh o tren roi reply lai (lan "
+                                + buaLanThu + ")");
+                    }
+                }
+                return;                // đã báo rồi; nhánh này chạy mỗi 3 giây tới khi bùa được giải
+            }
+            buaDangDinh = true;
+            buaLanThu = 1;
+            buaGuiLuc = 0;
+            String noiDung = t.trim();
+            if (noiDung.length() > 300) noiDung = noiDung.substring(0, 300);
+            log("Bua ue tho: DANG BI YEM -> " + noiDung);
+
+            guiAnhCaptcha(noiDung, 1);
+
+            // In danh sách HÀM một lần — giữ lại làm công cụ chẩn đoán cho bản cập nhật sau.
+            Object bangD = timBangCaptcha();
+            if (bangD != null && getSettingInt("bua_ue_tho_dump_ham", 1) == 1) {
+                pushScan("=== HAM BANG CAPTCHA ===" + dumpHamBangCaptcha(bangD));
+            }
+
+            // MỔ XẺ BẢNG NGAY LẦN ĐẦU GẶP.
+            //
+            // Chưa biết trường nào giữ ảnh captcha, cũng chưa biết ô nhập mã nằm đâu. Bảng này
+            // chỉ hiện 5 phút và không gọi ra theo ý muốn được — đợi có người ngồi sẵn ở máy để
+            // bấm nút soi là đợi một điều kiện không kiểm soát được. Tự dump ngay lúc gặp thì
+            // lần dính bùa ĐẦU TIÊN đã cho đủ dữ liệu để nối phần còn lại.
+            if (getSettingInt("bua_ue_tho_dump", 1) == 1) {
+                pushScan("=== BANG CAPTCHA BUA UE THO ===" + dumpBangCaptcha());
+            }
+        } catch (Exception e) {
+            log("tickBuaUeTho error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Mổ xẻ SÂU THÊM MỘT TẦNG so với dumpAllFields.
+     *
+     * Bản mổ 16:23 ngày 09/08 chỉ ra đúng hai chỗ còn bí, và cả hai đều bị `dumpAllFields` in
+     * gọn thành một dòng vô nghĩa:
+     *   · `b:String[]=String[1]`  — nội dung câu thông báo nằm trong đó, chỉ thấy độ dài
+     *   · `d:fV=<a.fV>` / `h:fY=<a.fY>` — một trong hai gần như chắc là chỗ giữ ẢNH captcha,
+     *     chỉ thấy tên lớp
+     * Không có hai thứ đó thì không nối được bước gửi ảnh. Nên bung String[] ra và đi thêm ĐÚNG
+     * một tầng vào các đối tượng con — một tầng là đủ thấy mặt, mà không nổ thành hàng nghìn dòng
+     * như đi đệ quy không đáy.
+     */
+    private String dumpSauMotTang(Object o) {
+        if (o == null) return " (null)";
+        StringBuilder sb = new StringBuilder(dumpAllFields(o));
+        try {
+            for (Class<?> c = o.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(f.getModifiers())) continue;
+                    try {
+                        f.setAccessible(true);
+                        Object v = f.get(o);
+                        if (v == null) continue;
+                        if (v.getClass().isArray()
+                                && v.getClass().getComponentType() == String.class) {
+                            int n = java.lang.reflect.Array.getLength(v);
+                            for (int k = 0; k < n; k++) {
+                                Object s = java.lang.reflect.Array.get(v, k);
+                                sb.append("\n        ").append(c.getSimpleName()).append(".")
+                                  .append(f.getName()).append("[").append(k).append("]='")
+                                  .append(s).append("'");
+                            }
+                        } else if (!(v instanceof String) && !(v instanceof Number)
+                                && !(v instanceof Boolean) && !(v instanceof Character)
+                                && !(v instanceof java.util.Collection)
+                                && !v.getClass().isArray()
+                                && v.getClass().getName().startsWith("a.")) {
+                            sb.append("\n        >> ").append(c.getSimpleName()).append(".")
+                              .append(f.getName()).append(" = ").append(v.getClass().getName())
+                              .append(dumpAllFields(v));
+                        }
+                    } catch (Throwable ignore) {}
+                }
+            }
+        } catch (Throwable ignore) {}
+        return sb.toString();
+    }
+
+    /** Mổ xẻ chồng bảng lúc captcha đang hiện — để tìm chỗ giữ ảnh và ô nhập mã. */
+    private String dumpBangCaptcha() {
+        StringBuilder sb = new StringBuilder();
+        try {
+            sb.append(dumpPanelStack());
+            if (fkFieldAn == null) return sb.toString();
+            Object zInst = getZ();
+            if (zInst == null) return sb.toString();
+            Object o = fkFieldAn.get(zInst);
+            if (!(o instanceof java.util.Vector)) return sb.toString();
+            java.util.Vector<?> stack = (java.util.Vector<?>) o;
+            // Chỉ mổ vài bảng trên cùng: captcha là bảng vừa mở nên nó nằm ở đỉnh chồng, còn mổ
+            // cả chồng thì ra hàng nghìn dòng và thứ cần tìm chìm nghỉm trong đó.
+            int sau = getSettingInt("bua_ue_tho_dump_sau", 3);
+            for (int i = stack.size() - 1; i >= 0 && i > stack.size() - 1 - sau; i--) {
+                Object p = stack.get(i);
+                if (p == null) continue;
+                sb.append("\n--- MO XE BANG [").append(i).append("] ")
+                  .append(p.getClass().getName()).append(dumpSauMotTang(p));
+            }
+        } catch (Exception e) {
+            sb.append("\n  loi mo xe: ").append(e);
+        }
+        return sb.toString();
+    }
+
+    // ── CHUYỂN TIẾP CAPTCHA ────────────────────────────────────────────────────────────────
+    //
+    // Tool KHÔNG giải mã. Nó chuyển tấm ảnh cho người thật xem, rồi gõ hộ câu trả lời của người
+    // đó vào ô — làm cái bàn phím nối dài, không phải làm cái đầu. Đó là ranh đã thống nhất.
+    //
+    // Chỗ đặt mọi thứ đọc được từ bản mổ 16:30 ngày 09/08:
+    //   bảng    a.ew  (nằm trong chồng z.an, luôn ở đỉnh vì nó vừa mở)
+    //   ảnh     a.ew → aT.d → a.fV  có sẵn Pixmap 80×50 — đọc thẳng, không phải chụp màn hình
+    //   ô nhập  a.ew.h → a.fY       (aY=4 = đúng độ dài mã, dấu hiệu mạnh đây là ô nhập)
+    //   nút     a.ew → aT.F → a.by  có j='Xác nhận'
+
+    /** Đọc một trường số của bảng theo tên, đi cả lớp cha. Không có thì trả `neuThieu`. */
+    private int docSoTruong(Object o, String ten, int neuThieu) {
+        if (o == null || ten == null || ten.trim().isEmpty()) return neuThieu;
+        for (Class<?> c = o.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+            try {
+                Field f = c.getDeclaredField(ten.trim());
+                f.setAccessible(true);
+                Object v = f.get(o);
+                if (v instanceof Number) return ((Number) v).intValue();
+            } catch (NoSuchFieldException ignore) {
+            } catch (Throwable ignore) { return neuThieu; }
+        }
+        return neuThieu;
+    }
+
+    /** Đọc một trường String của bảng theo tên, đi cả lớp cha. Không có thì trả rỗng. */
+    private String docChuoiTruong(Object o, String ten) {
+        if (o == null || ten == null || ten.trim().isEmpty()) return "";
+        for (Class<?> c = o.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+            try {
+                Field f = c.getDeclaredField(ten.trim());
+                if (f.getType() != String.class) continue;
+                f.setAccessible(true);
+                Object v = f.get(o);
+                if (v != null) return v.toString().trim();
+            } catch (NoSuchFieldException ignore) {
+            } catch (Throwable ignore) { return ""; }
+        }
+        return "";
+    }
+
+    /** Bảng captcha đang mở, hoặc null. Nhận theo LỚP khai trong cfg. */
+    private Object timBangCaptcha() {
+        try {
+            if (fkFieldAn == null) return null;
+            Object zInst = getZ();
+            if (zInst == null) return null;
+            Object o = fkFieldAn.get(zInst);
+            if (!(o instanceof java.util.Vector)) return null;
+            java.util.Vector<?> stack = (java.util.Vector<?>) o;
+            String lop = getSetting("bua_ue_tho_lop_bang", "a.ew");
+            for (int i = stack.size() - 1; i >= 0; i--) {
+                Object p = stack.get(i);
+                if (p != null && p.getClass().getName().equals(lop)) return p;
+            }
+        } catch (Exception ignore) {}
+        return null;
+    }
+
+    /**
+     * Ảnh captcha dạng PNG.
+     *
+     * TÌM THEO KIỂU, KHÔNG THEO TÊN TRƯỜNG: duyệt các trường của bảng, trường nào trỏ tới một đối
+     * tượng CÓ CHỨA `com.badlogic.gdx.graphics.Pixmap` thì đó là chỗ giữ ảnh. Tên trường (`d`) là
+     * thứ trình làm rối đổi được sau một bản cập nhật, còn "đối tượng này có một Pixmap" là tính
+     * chất quan sát được — cùng lý do đã chọn lọc-theo-kiểu ở z.D.
+     *
+     * Chạy ngay trên luồng render (tick() được nhét vào a.a.render()) nên đọc Pixmap là an toàn:
+     * Pixmap nằm ở bộ nhớ thường, không phải texture trên GPU, không cần đụng GL.
+     */
+    private byte[] anhCaptchaPng(Object bang) {
+        if (bang == null) return null;
+        try {
+            Class<?> pixCls = Class.forName("com.badlogic.gdx.graphics.Pixmap");
+            Object pix = null;
+            for (Class<?> c = bang.getClass(); c != null && c != Object.class && pix == null;
+                 c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(f.getModifiers())) continue;
+                    try {
+                        f.setAccessible(true);
+                        Object v = f.get(bang);
+                        if (v == null || !v.getClass().getName().startsWith("a.")) continue;
+                        for (Field g : v.getClass().getDeclaredFields()) {
+                            if (g.getType() != pixCls) continue;
+                            g.setAccessible(true);
+                            Object p = g.get(v);
+                            if (p != null) { pix = p; break; }
+                        }
+                    } catch (Throwable ignore) {}
+                    if (pix != null) break;
+                }
+            }
+            if (pix == null) { log("Bua ue tho: khong tim thay Pixmap trong bang captcha"); return null; }
+
+            Object raGiay = sualAnh(pix, pixCls);   // lật lại + phóng to; hỏng thì trả nguyên bản
+
+            Class<?> pngCls = Class.forName("com.badlogic.gdx.graphics.PixmapIO$PNG");
+            Object png = pngCls.getConstructor().newInstance();
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            pngCls.getMethod("write", java.io.OutputStream.class, pixCls).invoke(png, bos, raGiay);
+            try { pngCls.getMethod("dispose").invoke(png); } catch (Throwable ignore) {}
+            if (raGiay != pix) {
+                try { pixCls.getMethod("dispose").invoke(raGiay); } catch (Throwable ignore) {}
+            }
+            return bos.toByteArray();
+        } catch (Throwable e) {
+            log("Bua ue tho: lay anh captcha hong: " + e);
+            return null;
+        }
+    }
+
+    /**
+     * LẬT LẠI TRỤC Y VÀ PHÓNG TO ảnh captcha trước khi gửi đi.
+     *
+     * Vì sao lật: `Pixmap` của libgdx xếp hàng điểm ảnh từ TRÊN xuống, còn giao diện game vẽ theo
+     * hệ toạ độ y-hướng-xuống nên nó lật lúc vẽ. Đọc thẳng bộ nhớ ra rồi ghi PNG thì được đúng
+     * tấm ảnh game giữ, nhưng LỘN NGƯỢC so với cái hiện trên màn hình — người nhìn phải tự lật
+     * trong đầu, mà đây là captcha, vốn đã cố tình làm khó đọc.
+     *
+     * Vì sao phóng to: ảnh gốc 80×50. Trên điện thoại thì Telegram co lại còn bằng con tem.
+     * Phóng bằng NearestNeighbour chứ không nội suy — captcha là nét mảnh, làm mượt là nhoè mất
+     * đúng thứ cần đọc.
+     *
+     * Hỏng ở bất kỳ bước nào thì TRẢ VỀ NGUYÊN BẢN. Ảnh lộn ngược vẫn đọc được nếu cố; không có
+     * ảnh thì mất trắng lượt. Đây là chỗ làm đẹp, không được phép làm hỏng đường chính.
+     */
+    private Object sualAnh(Object src, Class<?> pixCls) {
+        try {
+            int lat = getSettingInt("bua_ue_tho_lat_anh", 1);
+            int k = getSettingInt("bua_ue_tho_phong_to", 4);
+            if (k < 1) k = 1;
+            if (lat != 1 && k == 1) return src;
+
+            int w = ((Number) pixCls.getMethod("getWidth").invoke(src)).intValue();
+            int h = ((Number) pixCls.getMethod("getHeight").invoke(src)).intValue();
+            if (w <= 0 || h <= 0 || (long) w * k > 4000 || (long) h * k > 4000) return src;
+
+            Class<?> fmtCls = Class.forName("com.badlogic.gdx.graphics.Pixmap$Format");
+            Object fmt = pixCls.getMethod("getFormat").invoke(src);
+            Object dst = pixCls.getConstructor(int.class, int.class, fmtCls)
+                               .newInstance(w * k, h * k, fmt);
+
+            // Cả hai là hàm TĨNH trong libgdx. Không tắt trộn màu thì lúc chép, phần trong suốt
+            // của nguồn bị hoà với nền chứ không chép thẳng.
+            try {
+                Class<?> blCls = Class.forName("com.badlogic.gdx.graphics.Pixmap$Blending");
+                pixCls.getMethod("setBlending", blCls)
+                      .invoke(null, layHangSo(blCls, "None"));
+            } catch (Throwable ignore) {}
+            try {
+                Class<?> flCls = Class.forName("com.badlogic.gdx.graphics.Pixmap$Filter");
+                pixCls.getMethod("setFilter", flCls)
+                      .invoke(null, layHangSo(flCls, "NearestNeighbour"));
+            } catch (Throwable ignore) {}
+
+            java.lang.reflect.Method ve = pixCls.getMethod("drawPixmap", pixCls,
+                    int.class, int.class, int.class, int.class,
+                    int.class, int.class, int.class, int.class);
+            // Chép TỪNG HÀNG, hàng nguồn y rơi xuống hàng đích (h-1-y) ⇒ lật dọc. Làm luôn trong
+            // một lượt với phóng to, khỏi phải dựng thêm một ảnh trung gian.
+            for (int y = 0; y < h; y++) {
+                int dy = (lat == 1) ? (h - 1 - y) : y;
+                ve.invoke(dst, src, 0, y, w, 1, 0, dy * k, w * k, k);
+            }
+            return dst;
+        } catch (Throwable e) {
+            log("Bua ue tho: lat/phong anh hong (" + e + ") -> gui nguyen ban");
+            return src;
+        }
+    }
+
+    /** Lấy một hằng số enum theo tên, không cần ép kiểu tổng quát. */
+    private Object layHangSo(Class<?> enumCls, String ten) throws Exception {
+        for (Object o : enumCls.getEnumConstants())
+            if (String.valueOf(o).equals(ten)) return o;
+        throw new NoSuchFieldException(ten + " khong co trong " + enumCls.getName());
+    }
+
+    /**
+     * Gõ mã của NGƯỜI DÙNG vào ô rồi bấm Xác nhận.
+     *
+     * Chưa biết chắc trường nào của ô nhập giữ chữ — bản mổ cho thấy `a.fY` có nhiều trường String
+     * và lúc trống thì cái nào cũng rỗng, nên không phân biệt được bằng cách nhìn. Thay vì đoán
+     * một cái rồi im lặng hỏng, ghi vào CẢ DANH SÁCH khai trong cfg và IN RA đã ghi được những
+     * cái nào. Chạy thật một lần là biết cái nào ăn, rồi rút danh sách lại — sửa cfg, không phải
+     * dựng lại jar.
+     *
+     * Tương tự với nút: tên hàm bấm để trong cfg. Chưa khai thì chỉ ghi mã rồi thôi, và người dùng
+     * bấm nút bằng tay — vẫn hơn hẳn phải tự đọc ảnh rồi tự gõ.
+     */
+    public String nhapMaCaptcha(String ma) {
+        if (ma == null || ma.trim().isEmpty()) return "LOI: ma rong";
+        ma = ma.trim();
+        Object bang = timBangCaptcha();
+        if (bang == null) return "LOI: khong con bang captcha nao dang mo";
+        StringBuilder daGhi = new StringBuilder();
+        try {
+            Object oNhap = null;
+            String tenO = getSetting("bua_ue_tho_truong_o_nhap", "h");
+            for (Class<?> c = bang.getClass(); c != null && c != Object.class && oNhap == null;
+                 c = c.getSuperclass()) {
+                try {
+                    Field f = c.getDeclaredField(tenO);
+                    f.setAccessible(true);
+                    oNhap = f.get(bang);
+                } catch (NoSuchFieldException ignore) {}
+            }
+            if (oNhap == null) return "LOI: khong tim thay o nhap (truong '" + tenO + "')";
+
+            for (String ten : getSetting("bua_ue_tho_o_nhap_truong", "ap,n,Q,R,aq").split(",")) {
+                ten = ten.trim();
+                if (ten.isEmpty()) continue;
+                for (Class<?> c = oNhap.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                    try {
+                        Field f = c.getDeclaredField(ten);
+                        if (f.getType() != String.class) break;
+                        f.setAccessible(true);
+                        f.set(oNhap, ma);
+                        daGhi.append(ten).append(" ");
+                        break;
+                    } catch (NoSuchFieldException ignore) {}
+                }
+            }
+            // Bảng cũng có thể tự giữ một bản sao của chữ đã gõ.
+            //
+            // MẶC ĐỊNH RỖNG, và đó là một bản vá chứ không phải bỏ trống cho vui: trước đây mặc
+            // định là "S", mà `a.ew.S` giữ TÊN KẺ YỂM chứ không phải ô nhập — ghi mã vào đó là
+            // xoá mất tên. Đặt rỗng trong cfg KHÔNG đủ để chữa: `String.split(",")` của Java cắt
+            // bỏ phần tử rỗng ở cuối, nên dòng `set,khoa,` chỉ tách ra 2 phần và giá trị rỗng
+            // không bao giờ được ghi nhận ⇒ getSetting rơi về mặc định. Phải sửa chính mặc định.
+            for (String ten : getSetting("bua_ue_tho_bang_truong", "").split(",")) {
+                ten = ten.trim();
+                if (ten.isEmpty()) continue;
+                for (Class<?> c = bang.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                    try {
+                        Field f = c.getDeclaredField(ten);
+                        if (f.getType() != String.class) break;
+                        f.setAccessible(true);
+                        f.set(bang, ma);
+                        daGhi.append("bang.").append(ten).append(" ");
+                        break;
+                    } catch (NoSuchFieldException ignore) {}
+                }
+            }
+        } catch (Throwable e) {
+            return "LOI: ghi ma hong: " + e;
+        }
+
+        String ketQua = "da ghi ma '" + ma + "' vao: " + (daGhi.length() == 0 ? "(khong cho nao)" : daGhi);
+
+        // ── BẤM XÁC NHẬN ──────────────────────────────────────────────────────────────────
+        //
+        // BẤM VÀO ĐỐI TƯỢNG NÚT, không phải vào bảng. Đọc bảng phương thức thật (không phải
+        // constant pool — chỗ đó lẫn cả hàm mà lớp GỌI SANG lớp khác, và em đã đoán sai đúng vì
+        // nhầm hai thứ đó):
+        //     a.ew :  b(La/A;)V         ⇒ hàm VẼ, a.A là lớp đồ hoạ
+        //             a(La/dI;II)V      ⇒ xử lý sự kiện
+        //     a.by :  b()V              ⇒ KHÔNG tham số, trên chính đối tượng NÚT
+        //
+        // Nên `b` trên bảng là vẽ, còn `b` trên nút mới là bấm. Cùng một tên, hai nghĩa — và đó
+        // là lý do lần trước gọi không ra gì: phép tra chỉ nhận bản không-tham-số hoặc 1 String,
+        // mà `ew.b` cần một `a.A`.
+        //
+        // Cả CHỖ BẤM lẫn TÊN HÀM đều nằm trong cfg: chưa chạy thật thì chưa chắc, mà sai thì đổi
+        // một dòng cfg còn hơn dựng lại jar.
+        // ĐƯỜNG CHÍNH: LÀM ĐÚNG THỨ NÚT XÁC NHẬN LÀM, không đi mò cách giả lập cú bấm.
+        //
+        // Giải mã `a.ew.a(La/dI;II)V` — hàm xử lý sự kiện của bảng — ra đúng chuỗi việc:
+        //     a.ew.a()      -> a.fY      lấy ô nhập
+        //     a.fY.a()      -> String    ĐỌC chữ trong ô
+        //     a.ew.M        : byte       mã lệnh
+        //     a.fm.c(byte)  -> a.fm      dựng gói tin
+        //     a.fm.m(String)             ghi mã vào gói
+        //     a.fm.aG()                  gửi
+        //
+        // Tức "bấm Xác nhận" rốt cuộc chỉ là DỰNG MỘT GÓI RỒI GỬI. Làm thẳng như vậy thì không
+        // phải chế ra một sự kiện chuột giả với toạ độ và mã sự kiện phải đoán — hai vòng trước
+        // đã đoán sai đúng vì cố tìm "cái nút" thay vì tìm "việc nó làm".
+        //
+        // Và `M` KHÔNG phải mã loại bảng như đã tưởng lúc đầu — nó là MÃ LỆNH của gói. Đọc sống
+        // từ bảng chứ không nhúng số -44 vào code: server đổi mã lệnh thì bảng vẫn mang số đúng.
+        if (getSettingInt("bua_ue_tho_gui_goi", 1) == 1 && fmClass != null) {
+            try {
+                int cmd = docSoTruong(bang, getSetting("bua_ue_tho_truong_ma", "M"), Integer.MIN_VALUE);
+                if (cmd == Integer.MIN_VALUE) {
+                    ketQua += " | khong doc duoc ma lenh tu bang";
+                } else {
+                    // getDeclaredMethod + setAccessible, KHÔNG getMethod: lớp game bị làm rối nên
+                    // hàm có thể không public, mà getMethod chỉ thấy public rồi ném lỗi câm.
+                    java.lang.reflect.Method tao =
+                            fmClass.getDeclaredMethod(getSetting("bua_ue_tho_fm_tao", "c"), byte.class);
+                    tao.setAccessible(true);
+                    Object goi = tao.invoke(null, Byte.valueOf((byte) cmd));
+
+                    // Dùng lại fmWriteUTF đã map sẵn: 'm' bị nạp chồng (m(boolean) = writeBoolean),
+                    // quét theo tên là vớ nhầm bản boolean — chú thích ở initReflection đã cảnh báo.
+                    fmWriteUTF.setAccessible(true);
+                    fmWriteUTF.invoke(goi, ma);
+
+                    java.lang.reflect.Method gui =
+                            fmClass.getDeclaredMethod(getSetting("bua_ue_tho_fm_gui", "aG"));
+                    gui.setAccessible(true);
+                    gui.invoke(goi);
+                    // ĐÁNH DẤU LÚC GỬI. Nhịp soi sẽ nhìn lại sau vài giây: bảng còn đó nghĩa là
+                    // mã sai ⇒ tự chụp ảnh mới gửi lại. Không đánh dấu thì gõ sai là kẹt luôn.
+                    buaGuiLuc = System.currentTimeMillis();
+                    ketQua += " | DA GUI GOI xac nhan (cmd=" + cmd + ")";
+                    log("Bua ue tho: " + ketQua);
+                    pushBua("bua_ue_tho_nhap", ketQua);
+                    return ketQua;
+                }
+            } catch (Throwable e) {
+                ketQua += " | gui goi hong: " + e + " -> thu goi ham";
+            }
+        }
+
+        // ĐƯỜNG LUI: gọi một hàm trên nút hoặc trên bảng. Giữ lại vì nó chỉnh được hoàn toàn bằng
+        // cfg — nếu bản cập nhật nào đó đổi cách gửi gói thì vẫn còn một lối để thử mà không phải
+        // dựng lại jar.
+        String hamBam = getSetting("bua_ue_tho_ham_xac_nhan", "").trim();
+        String bamO = getSetting("bua_ue_tho_bam_o", "nut").trim();
+        if (hamBam.isEmpty()) {
+            ketQua += " | bua_ue_tho_ham_xac_nhan de trong -> bam nut bang tay";
+        } else {
+            Object dich = bang;
+            if (bamO.equalsIgnoreCase("nut")) {
+                Object nut = null;
+                String tenNut = getSetting("bua_ue_tho_truong_nut", "F");
+                for (Class<?> c = bang.getClass(); c != null && c != Object.class && nut == null;
+                     c = c.getSuperclass()) {
+                    try {
+                        Field f = c.getDeclaredField(tenNut);
+                        f.setAccessible(true);
+                        nut = f.get(bang);
+                    } catch (NoSuchFieldException ignore) {
+                    } catch (IllegalAccessException ignore) {}
+                }
+                if (nut == null) ketQua += " | KHONG thay nut (truong '" + tenNut + "')";
+                else dich = nut;
+            }
+            java.lang.reflect.Method mTrong = null, mChuoi = null;
+            for (Class<?> c = dich.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
+                    if (!m.getName().equals(hamBam)) continue;
+                    Class<?>[] ts = m.getParameterTypes();
+                    if (ts.length == 0 && mTrong == null) mTrong = m;
+                    if (ts.length == 1 && ts[0] == String.class && mChuoi == null) mChuoi = m;
+                }
+                if (mTrong != null) break;
+            }
+            java.lang.reflect.Method m = (mTrong != null) ? mTrong : mChuoi;
+            if (m == null) {
+                ketQua += " | KHONG thay ham '" + hamBam + "' tren "
+                        + dich.getClass().getName() + " (khong tham so hoac 1 String)";
+            } else {
+                try {
+                    m.setAccessible(true);
+                    if (m.getParameterTypes().length == 1) m.invoke(dich, ma);
+                    else m.invoke(dich);
+                    ketQua += " | da goi " + dich.getClass().getName() + "." + hamBam
+                            + (m.getParameterTypes().length == 1 ? "(ma)" : "()");
+                } catch (Throwable e) {
+                    ketQua += " | goi " + hamBam + " hong: " + e;
+                }
+            }
+        }
+        log("Bua ue tho: " + ketQua);
+        pushBua("bua_ue_tho_nhap", ketQua);
+        return ketQua;
+    }
+
+    /**
+     * IN RA DANH SÁCH HÀM của bảng, ô nhập và nút — để biết phải gọi cái gì mới là "bấm Xác nhận".
+     * Mổ trường thì đã thấy đủ chỗ chứa, nhưng chỗ chứa không cho biết cách KÍCH HOẠT. Đây là mảnh
+     * cuối, và in một lần lúc gặp bảng là đủ.
+     */
+    private String dumpHamBangCaptcha(Object bang) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            sb.append("\n  HAM cua ").append(bang.getClass().getName()).append(":");
+            for (Class<?> c = bang.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
+                    // IN KIỂU THAM SỐ, không chỉ in SỐ LƯỢNG. Bản trước chỉ in số nên nhìn thấy
+                    // "b(1 tham so)" mà vẫn không gọi được — phải mở file lớp ra đọc chữ ký mới
+                    // biết tham số là String. Một cột thiếu làm cả bản in thành vô dụng.
+                    sb.append("\n    ").append(c.getSimpleName()).append(".").append(m.getName()).append("(");
+                    Class<?>[] ts = m.getParameterTypes();
+                    for (int k = 0; k < ts.length; k++) {
+                        if (k > 0) sb.append(", ");
+                        sb.append(ts[k].getSimpleName());
+                    }
+                    sb.append(") -> ").append(m.getReturnType().getSimpleName());
+                }
+            }
+        } catch (Throwable e) {
+            sb.append(" loi: ").append(e);
+        }
+        return sb.toString();
+    }
+
+    private void pushBua(String type, String detail) {
+        try {
+            java.io.PrintWriter w = Auto.getWriter();
+            if (w == null) return;
+            w.print("{\"type\":\"" + type + "\",\"username\":\"" + escapeJson(Auto.getUsername()) + "\""
+                    + ",\"map\":" + getMapAnToan()
+                    + ",\"detail\":\"" + escapeJson(detail) + "\"}\n");
+            w.flush();
+        } catch (Exception e) {
+            log("pushBua error: " + e.getMessage());
+        }
+    }
+
+    /** Gói mang cả ẢNH captcha (PNG mã hoá base64) — Manager sẽ đẩy thẳng lên Telegram. */
+    private void pushBuaAnh(String detail, String anhB64) {
+        try {
+            java.io.PrintWriter w = Auto.getWriter();
+            if (w == null) return;
+            w.print("{\"type\":\"bua_ue_tho\",\"username\":\"" + escapeJson(Auto.getUsername()) + "\""
+                    + ",\"map\":" + getMapAnToan()
+                    + ",\"anh\":\"" + anhB64 + "\""
+                    + ",\"detail\":\"" + escapeJson(detail) + "\"}\n");
+            w.flush();
+        } catch (Exception e) {
+            log("pushBuaAnh error: " + e.getMessage());
+        }
+    }
+
     private void pushGom(String type, String detail) {
         pushGom(type, detail, null);
     }
@@ -11533,6 +12396,11 @@ public class TaskManager {
                 if (reflectionReady) tickFollow(System.currentTimeMillis());
             }
         }
+
+        // Bị người khác yểm bùa uế thổ — chạy KHÔNG cần hoạt động nào và KHÔNG chặn theo
+        // reflectionReady (nó tự lo bên trong). Bị yểm là lúc nick đang chết nằm im, tức đúng
+        // lúc mọi máy trạng thái khác đều không có gì để nói. Xem tickBuaUeTho.
+        tickBuaUeTho(System.currentTimeMillis());
 
         // Thử đi qua map — máy riêng, tự tắt khi có kết quả
         if (exStep > 0) {
