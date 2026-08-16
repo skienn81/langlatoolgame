@@ -12,7 +12,7 @@ README nói dự án này *là gì*. File này chỉ tập trung vào **làm sao
 ## Làm nhanh (5 dòng)
 
 ```bat
-git clone https://github.com/hoang123-123/langlatool.git
+git clone https://github.com/skienn81/langlatoolgame.git
 cd langlatool
 :: chép jar game của bạn vào đây, đặt tên client_modded.jar
 set LANGLA_GAME=C:\Duong\Dan\Game
@@ -30,7 +30,7 @@ Bên dưới là chi tiết từng bước, đánh số 0 → 8. **Bước 6 t�
 ## Bước 0 — Tải mã nguồn về
 
 ```bat
-git clone https://github.com/hoang123-123/langlatool.git
+git clone https://github.com/skienn81/langlatoolgame.git
 cd langlatool
 ```
 
@@ -40,9 +40,10 @@ mục bất kỳ.
 Tải xong thư mục sẽ có đúng chừng này:
 
 ```
-Injector\        Manager\        Mod\
-build_run.bat    config.mau.json doi_hinh.cfg    quest_anchors.cfg
-README.md        HUONG_DAN_SETUP.md              .gitignore
+Injector\          Manager\            Mod\
+build_run.bat      config.mau.json     doi_hinh.cfg        quest_anchors.cfg
+README.md          HUONG_DAN_SETUP.md  SYSTEM_MAP.md       PHAN_TICH_CONG_CU.md
+.gitignore
 ```
 
 **Chưa có `Manager.exe`, chưa có thư mục `bin\`, chưa có `client_modded.jar`.** Ba thứ đó sinh ra
@@ -412,6 +413,31 @@ ghi chú ngay tại chỗ. Đáng để ý mấy cái này:
 Các khoá còn lại (`lop_bang`, `truong_ma`, `ma_bang`, `fm_tao`, `fm_gui`…) là toạ độ trong bộ nhớ
 game — chỉ động tới khi game cập nhật làm hỏng phép dò.
 
+### 8.5. Điều khiển từ xa bằng lệnh Bot Telegram
+
+Bên cạnh việc nhận bảng trạng thái và gỡ bùa, bạn có thể gửi lệnh trực tiếp vào nhóm hoặc nhắn riêng cho Bot:
+
+| Lệnh | Ý nghĩa | Ví dụ |
+|---|---|---|
+| `/status` (hoặc `/st`) | Báo cáo nhanh tình trạng các nick | `/status` |
+| `/nv [nick]` | Chạy auto nhiệm vụ ngày | `/nv` (chạy hết) hoặc `/nv user1` |
+| `/agt` · `/ai` | Chạy Ải Gia Tộc (`/agt stop` để dừng) | `/agt` |
+| `/ct` · `/camthuat` | Chạy Cấm Thuật (`/ct stop` để dừng) | `/ct` |
+| `/sc` · `/soncap` | Chạy Sơn Cáp (`/sc stop` để dừng) | `/sc` |
+| `/dc` · `/diacung` | Chạy Địa Cung | `/dc` |
+| `/gom` · `/gomdo` | Gom đồ về nick Lead (`/gom stop` để dừng) | `/gom` |
+| `/tt` · `/tinhthach` | Đổi tinh thạch NPC | `/tt` |
+| `/quiz` | Bật auto trả lời câu hỏi trắc nghiệm | `/quiz` |
+| `/vl` · `/velang` | Đưa nhân vật về làng an toàn | `/vl` |
+| `/wake [nick]` | Mở và login client game | `/wake user1` |
+| `/kill [nick]` | Tắt client game | `/kill user1` |
+| `/stop` | Dừng hoạt động hiện tại | `/stop` |
+| `/hengio <hh:mm> <lệnh>` | Hẹn giờ chạy tác vụ mỗi ngày | `/hengio 06:00 nv` |
+| `/timer <phút> <lệnh>` | Đếm ngược thực hiện tác vụ | `/timer 15 gom` |
+| `/dshengio` | Xem danh sách các lịch hẹn giờ | `/dshengio` |
+| `/huyhengio <id>` | Huỷ lịch hẹn giờ theo ID | `/huyhengio 1` |
+| `/help` | Xem trợ giúp cú pháp lệnh | `/help` |
+
 ---
 
 ## Chạy thử lần đầu
@@ -495,7 +521,7 @@ dotnet --version
 python --version
 
 :: ── lấy mã nguồn ───────────────────────────────────────────────
-git clone https://github.com/hoang123-123/langlatool.git
+git clone https://github.com/skienn81/langlatoolgame.git
 cd langlatool
 
 :: ── trỏ tới game ───────────────────────────────────────────────
@@ -532,3 +558,4 @@ Manager\bin\Release\net8.0-windows\telegram.cfg    token bot
 
 Cả hai đã nằm sẵn trong `.gitignore`. Ai có token bot là **chiếm được bot** — đọc được mọi tin
 trong nhóm và gửi tin giả danh.
+

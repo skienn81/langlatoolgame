@@ -7,7 +7,7 @@ Bộ công cụ tự động hoá cho game Làng Lá, chạy nhiều tài khoả
 
 | Phần | Là gì |
 |---|---|
-| **Manager** (C#, WinForms) | Bảng điều khiển. Mở client, ra lệnh, nhận báo cáo. |
+| **Manager** (C#, WinForms) | Bảng điều khiển & Server điều phối. Mở client, ra lệnh, hẹn giờ, nhận báo cáo, điều khiển từ xa qua Telegram. |
 | **Mod** (Java) | Chạy bên trong client game. Nhận lệnh từ Manager, thao tác trong game, báo kết quả về. |
 
 Hai bên nói chuyện qua TCP `127.0.0.1:9090`, mỗi dòng một gói JSON.
@@ -48,7 +48,7 @@ Không cần JDK — script mượn JRE của game cộng với `ecj` (trình bi
 ### 0. Tải mã nguồn
 
 ```
-git clone https://github.com/hoang123-123/langlatool.git
+git clone https://github.com/skienn81/langlatoolgame.git
 ```
 
 ### 1. Lấy `client_modded.jar`
@@ -110,9 +110,9 @@ bạn chơi có thể khác. Đối chiếu lại trước khi chạy thật.
 Build xong (bước 4 trong hướng dẫn) sẽ có `Manager\bin\Release\net8.0-windows\Manager.exe`.
 Mở nó, tích các nick muốn chạy rồi bấm nút.
 
-### Các nút
+### Các nút & Tính năng chính
 
-| Nút | Làm gì |
+| Nút / Tính năng | Làm gì |
 |---|---|
 | 🚀 Khởi chạy | Mở client và login các nick đang tích. Kẹt ở màn đăng nhập thì tự tắt client login lại. |
 | ▶ Auto NV hằng ngày | Chạy nhiệm vụ ngày: nhận, đi tới map, đánh quái, trả nhiệm vụ. |
@@ -121,13 +121,15 @@ Mở nó, tích các nick muốn chạy rồi bấm nút.
 | 🎒 Gom đồ về lead | Mọi nick đang trong game giao đồ cho một nick nhận. Tuần tự từng nick vì game khoá giao dịch 30 giây. |
 | ⚔️ Cấm thuật · 🪢 Sơn cáp | Hoạt động nhóm. Trưởng nhóm đi tìm khu trống, lập nhóm, gọi thành viên. Các nhóm xuất phát ở khu lệch nhau để khỏi giẫm chân. |
 | 🏰 Ải gia tộc | Một nick mở cửa ải, mọi nick đang trong game vào theo, dồn hoả lực vào cùng một mục tiêu. |
-| 🏠 Về làng · 💀 Tắt game | |
+| ❓ Auto Quiz NPC | Tự động trả lời câu hỏi trắc nghiệm / câu hỏi kiểm tra tại NPC. |
+| ⏰ Scheduler / Hẹn giờ | Lập lịch tự động chạy các hoạt động (NV ngày, cấm thuật, gom đồ...) theo khung giờ cố định mỗi ngày. |
+| 🏠 Về làng · 💀 Tắt game | Đưa nhân vật về làng an toàn hoặc đóng nhanh client game. |
 
-Mỗi nút chạy một việc, **bấm tay từng bước**. Trình tự thường dùng trong ngày:
+Mỗi nút chạy một việc, **bấm tay từng bước** hoặc **lập lịch / điều khiển từ xa qua Telegram**. Trình tự thường dùng trong ngày:
 
 ```
 🚀 Khởi chạy → ▶ Auto NV hằng ngày → 🏯 Địa cung → 💎 Đổi tinh thạch → 🎒 Gom đồ
-rồi tuỳ lúc: ⚔️ Cấm thuật · 🪢 Sơn cáp · 🏰 Ải gia tộc
+rồi tuỳ lúc: ⚔️ Cấm thuật · 🪢 Sơn cáp · 🏰 Ải gia tộc · ❓ Auto Quiz
 ```
 
 Không có bước "đi treo" riêng: xong nhiệm vụ ngày, gom xong, đổi tinh thạch xong thì mod tự
@@ -136,52 +138,69 @@ chuyển sang treo (`gom_after_afk` / `tinh_thach_after_afk` trong `quest_anchor
 Nhiều nick hơn `max_client` thì tích một nhóm chạy trước, xong tắt client nhóm đó rồi tích
 nhóm sau — nút 🚀 Khởi chạy đếm số client đang mở và chặn nếu vượt trần.
 
-### Theo dõi qua Telegram (tuỳ chọn)
+---
 
-Điền token bot vào `telegram.cfg` là Manager bắn tin về điện thoại: một bảng trạng thái sửa tại
-chỗ (ai đang làm gì, tới đâu, đưa/nhận món gì, thuộc team nào), cộng tin rời cho mỗi lượt giao
-đồ và lỗi cần người can thiệp.
+## Điều khiển & Theo dõi qua Telegram
 
-File `telegram.cfg` **không có sẵn trong repo** — Manager tự sinh mẫu (token rỗng) ở
-`Manager\bin\Release\net8.0-windows\` ngay lần chạy đầu. `chat_id` cũng không phải tự tìm: nhắn
-cho bot một câu là Manager tự dò rồi ghi vào file.
+Điền token bot vào `telegram.cfg` để bật tính năng bot hai chiều mạnh mẽ:
 
-Để trống token thì tính năng tắt lặng lẽ, mọi thứ khác chạy y như cũ.
+### 1. Bảng theo dõi trạng thái tự động
+- Một tin nhắn duy nhất được chỉnh sửa tại chỗ (live update), không gây rác nhóm chat.
+- Hiển thị danh sách nick, cấp độ, máu, vị trí, công việc đang làm, trạng thái kết nối.
+- Báo riêng các sự kiện quan trọng: gom đồ thành công, lỗi hệ thống, nhặt vật phẩm hiếm.
 
-### Gỡ bùa uế thổ từ xa
+### 2. Gỡ bùa uế thổ từ xa (Bàn phím nối dài)
+- Khi bị người chơi khác yểm bùa uế thổ, client tự chụp ảnh mã captcha gửi lên Telegram.
+- Bạn chỉ cần **reply chính tin nhắn ảnh đó** bằng chuỗi ký tự captcha.
+- Manager sẽ nhận lệnh và tự động gõ mã vào game để giải bùa, hồi sinh nhân vật.
 
-Đường **hai chiều** duy nhất của tool — mọi thứ còn lại chỉ bắn tin đi.
+### 3. Điều khiển toàn diện bằng lệnh Telegram
+Bạn có thể nhắn lệnh trực tiếp cho Bot hoặc nhắn trong Group:
 
-Người chơi khác yểm "bùa uế thổ" lên nick bạn thì nhân vật chết và không tự hồi sinh được cho tới
-khi có người nhập đúng mã captcha — **bùa không tự hết**, chỉ nhập đúng mã hoặc tắt hẳn client mới
-thoát. Mà nick nằm chết thì không sinh sự kiện nào: trên bảng theo dõi nó im hệt nick đang cày
-ngon, không có tin báo thì cả buổi không ai biết.
-
-Mod chụp bảng captcha rồi đẩy ảnh lên Telegram; bạn **reply chính tin ảnh đó** bằng mã trong ảnh;
-Manager gõ hộ vào ô trong game. Định tuyến bằng `message_id` của tấm ảnh nên không phải gõ tên
-nick, và hai nick dính bùa cùng lúc cũng không lẫn.
-
-Tool **không giải ảnh** — nó làm bàn phím nối dài cho người thật, không làm cái đầu.
-
-Chi tiết cách dùng và ý nghĩa từng tin: [HUONG_DAN_SETUP.md](HUONG_DAN_SETUP.md) mục 8.4.
+| Lệnh | Ý nghĩa & Cú pháp |
+|---|---|
+| `/status` (hoặc `/st`) | Xem bảng trạng thái tổng quan các tài khoản |
+| `/nv [nick]` | Chạy Auto NV ngày (bỏ trống [nick] để chạy tất cả nick đang mở) |
+| `/agt` · `/ai` | Chạy Ải Gia Tộc (`/agt stop` để dừng) |
+| `/ct` · `/camthuat` | Chạy hoạt động Cấm Thuật (`/ct stop` để dừng) |
+| `/sc` · `/soncap` | Chạy hoạt động Sơn Cáp (`/sc stop` để dừng) |
+| `/dc` · `/diacung` | Chạy hoạt động Địa Cung |
+| `/gom` · `/gomdo` | Chạy gom đồ về nick Lead (`/gom stop` để dừng) |
+| `/tt` · `/tinhthach` | Đổi tinh thạch tại NPC |
+| `/quiz` | Bật auto trả lời câu hỏi trắc nghiệm NPC |
+| `/vl` · `/velang` | Đưa các nick về làng |
+| `/wake [nick]` | Mở và đăng nhập client game |
+| `/kill [nick]` | Tắt client game |
+| `/stop` | Dừng hoạt động hiện tại |
+| `/hengio <hh:mm> <lệnh>` | Hẹn giờ chạy lệnh (vd: `/hengio 06:00 nv`) |
+| `/timer <phút> <lệnh>` | Đặt đồng hồ đếm ngược chạy lệnh (vd: `/timer 30 gom`) |
+| `/dshengio` | Xem danh sách các lịch hẹn giờ đang chạy |
+| `/huyhengio <id>` | Huỷ lịch hẹn theo ID |
+| `/help` | Xem bảng trợ giúp các câu lệnh |
 
 ---
 
-## Cấu trúc
+## Cấu trúc thư mục
 
 ```
-Manager/            Bảng điều khiển C#
-  Form1.cs            giao diện, điều phối hoạt động
-  Form1.TheoDoi.cs    theo dõi từng nick, dựng bảng trạng thái
-  Telegram.cs         bot Telegram
-Mod/src/com/mybot/  Mod Java chạy trong client
-  Auto.java           vòng tick, login, kết nối Manager
-  TaskManager.java    toàn bộ máy trạng thái của các hoạt động
-Injector/           Vá bytecode: chèn Auto.tick() vào vòng render của game
-HUONG_DAN_SETUP.md  Cài đặt từng bước
-config.mau.json     Mẫu khai tài khoản — chép vào bin\ rồi đổi tên thành config.json
-doi_hinh.cfg        Khai team, nhóm cấm thuật / sơn cáp, nick mở ải, nick nhận đồ
-quest_anchors.cfg   ID map, toạ độ NPC, mã vật phẩm
+Manager/                      Bảng điều khiển C# (WinForms)
+  Form1.cs                      Giao diện, quản lý luồng điều phối chính
+  Form1.TheoDoi.cs              Theo dõi trạng thái từng nick, dựng bảng live-status
+  Form1.TelegramCommands.cs     Xử lý bộ câu lệnh điều khiển từ xa qua Telegram
+  Telegram.cs                   Giao tiếp API Telegram (Gửi tin, nhận webhook/polling, ảnh captcha)
+  QuizManager.cs                Bộ xử lý & ngân hàng dữ liệu câu hỏi trắc nghiệm NPC
+  Scheduler.cs                  Hệ thống hẹn giờ & lập lịch tác vụ tự động
+Mod/src/com/mybot/            Mã nguồn Mod Java chạy bên trong client game
+  Auto.java                     Vòng lặp tick, đăng nhập, giữ kết nối Socket với Manager
+  TaskManager.java              Toàn bộ máy trạng thái (State Machine) các hoạt động trong game
+Injector/                     Script vá bytecode Java (chèn hook Auto.tick vào game engine)
+  inject.py
+HUONG_DAN_SETUP.md            Hướng dẫn cài đặt chi tiết từng bước
+SYSTEM_MAP.md                 Bản đồ kiến trúc và luồng dữ liệu hệ thống
+PHAN_TICH_CONG_CU.md          Tài liệu phân tích kỹ thuật sâu
+config.mau.json               Mẫu cấu hình tài khoản
+doi_hinh.cfg                  Cấu hình đội hình, phân nhóm cấm thuật/sơn cáp/gom đồ
+quest_anchors.cfg             Cấu hình ID map, toạ độ NPC, mã vật phẩm
 ```
 
 Mod đọc `quest_anchors.cfg` lúc khởi động, nên sửa file đó xong phải **đóng hẳn client rồi mở
@@ -207,3 +226,4 @@ Manager/bin/Release/net8.0-windows/telegram.cfg    token bot
 ```
 
 Cả hai đã nằm trong `.gitignore`.
+
