@@ -836,13 +836,16 @@ public class TaskManager {
             Class<?> cdClass = Class.forName("a.cd");
             auMethodAw = cdClass.getDeclaredMethod("aw");
             auMethodAw.setAccessible(true);
-            // Find String[] field named "c" in au (menu items)
-            for (Field f : auClass.getDeclaredFields()) {
-                if (f.getName().equals("c") && f.getType() == String[].class) {
-                    auFieldMenuItems = f;
-                    f.setAccessible(true);
-                    break;
+            // Find String[] field in au or parent classes (menu items)
+            for (Class<?> c = auClass; c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (f.getType() == String[].class) {
+                        f.setAccessible(true);
+                        auFieldMenuItems = f;
+                        break;
+                    }
                 }
+                if (auFieldMenuItems != null) break;
             }
             // au.v (Vector - nội dung dialog) va au.ar (int - index dialog cha)
             for (Field f : auClass.getDeclaredFields()) {
@@ -1640,6 +1643,14 @@ public class TaskManager {
      * new fm(53) → writeShort(npcId) → writeByte(menuIndex) → send()
      */
     private void sendSelectMenu(int npcId, int menuIndex) throws Exception {
+        if (npcId <= 0) {
+            int dlgId = readDialogNpcId();
+            if (dlgId > 0) npcId = dlgId;
+            else {
+                int[] best = findQuizTsunadeNpc(null);
+                if (best != null && best[0] > 0) npcId = best[0];
+            }
+        }
         Object packet = fmClass.getConstructor(byte.class).newInstance((byte) 53);
         Method writeShort = fmClass.getDeclaredMethod("t", int.class);
         writeShort.setAccessible(true);
@@ -1650,6 +1661,7 @@ public class TaskManager {
         Method send = fmClass.getDeclaredMethod("aG");
         send.setAccessible(true);
         send.invoke(packet);
+        System.out.println("[Quiz Debug] Sent CMD 53 (SelectMenu) -> npcId=" + npcId + ", menuIndex=" + menuIndex);
     }
 
     /**
@@ -1990,7 +2002,11 @@ public class TaskManager {
             if (zFieldV == null) return -1;
             Object zInst = getZ();
             if (zInst == null) return -1;
-            return zFieldV.getShort(zInst);
+            Object val = zFieldV.get(zInst);
+            if (val instanceof Number) {
+                return ((Number) val).intValue();
+            }
+            return -1;
         } catch (Exception e) {
             return -1;
         }
@@ -2119,6 +2135,229 @@ public class TaskManager {
             }
         } catch (Exception e) {
             log("findNpcByName error: " + e.getMessage());
+        }
+        return null;
+    }
+
+    private int getEntityMaxHp(Object entity) {
+        if (entity == null) return 0;
+        try {
+            for (Class<?> c = entity.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    f.setAccessible(true);
+                    if (f.getType() == int.class && (f.getName().equals("A") || f.getName().equals("maxHp"))) {
+                        return f.getInt(entity);
+                    }
+                }
+            }
+            if (mobFieldHpMax != null) {
+                return mobFieldHpMax.getInt(entity);
+            }
+        } catch (Exception ignore) {}
+        return 0;
+    }
+
+    private int getEntityHp(Object entity) {
+        if (entity == null) return 0;
+        try {
+            for (Class<?> c = entity.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    f.setAccessible(true);
+                    if (f.getType() == int.class && (f.getName().equals("y") || f.getName().equals("hp"))) {
+                        return f.getInt(entity);
+                    }
+                }
+            }
+            if (mobFieldHp != null) {
+                return mobFieldHp.getInt(entity);
+            }
+        } catch (Exception ignore) {}
+        return 0;
+    }
+
+    private int getEntityId(Object entity) {
+        if (entity == null) return -1;
+        try {
+            if (frFieldAZ != null && frClass != null && frClass.isInstance(entity)) {
+                return frFieldAZ.getInt(entity);
+            }
+            if (mobFieldId != null) {
+                return mobFieldId.getInt(entity);
+            }
+            for (Class<?> c = entity.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (f.getType() == int.class && (f.getName().equals("aZ") || f.getName().equals("id"))) {
+                        f.setAccessible(true);
+                        return f.getInt(entity);
+                    }
+                }
+            }
+        } catch (Exception ignore) {}
+        return -1;
+    }
+
+    private String getEntityName(Object entity) {
+        if (entity == null) return "";
+        try {
+            String npcName = npcNameOf(entity);
+            if (npcName != null && !npcName.isEmpty()) return npcName;
+
+            String[] mobName = mobTemplateName(entity);
+            if (mobName != null && mobName[0] != null && !mobName[0].isEmpty()) return mobName[0];
+
+            for (Class<?> c = entity.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (f.getType() == String.class) {
+                        f.setAccessible(true);
+                        Object val = f.get(entity);
+                        if (val instanceof String && !((String) val).isEmpty()) {
+                            return (String) val;
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignore) {}
+        return "";
+    }
+
+    private short getEntityX(Object entity) {
+        if (entity == null) return 0;
+        try {
+            if (frFieldAr != null && frClass != null && frClass.isInstance(entity)) return frFieldAr.getShort(entity);
+            if (mobFieldAr != null) return mobFieldAr.getShort(entity);
+            for (Class<?> c = entity.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (f.getType() == short.class && f.getName().equals("ar")) {
+                        f.setAccessible(true);
+                        return f.getShort(entity);
+                    }
+                }
+            }
+        } catch (Exception ignore) {}
+        return 0;
+    }
+
+    private short getEntityY(Object entity) {
+        if (entity == null) return 0;
+        try {
+            if (frFieldAs != null && frClass != null && frClass.isInstance(entity)) return frFieldAs.getShort(entity);
+            if (mobFieldAs != null) return mobFieldAs.getShort(entity);
+            for (Class<?> c = entity.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (f.getType() == short.class && f.getName().equals("as")) {
+                        f.setAccessible(true);
+                        return f.getShort(entity);
+                    }
+                }
+            }
+        } catch (Exception ignore) {}
+        return 0;
+    }
+
+    private int readDialogNpcId() {
+        if (fkFieldAn == null || auClass == null) return -1;
+        try {
+            Object zInst = getZ();
+            if (zInst == null) return -1;
+            java.util.Vector<?> dialogStack = (java.util.Vector<?>) fkFieldAn.get(zInst);
+            if (dialogStack == null || dialogStack.isEmpty()) return -1;
+            for (int i = dialogStack.size() - 1; i >= 0; i--) {
+                Object panel = dialogStack.get(i);
+                if (panel != null && auClass.isInstance(panel)) {
+                    if (auFieldAs != null) {
+                        return auFieldAs.getInt(panel);
+                    }
+                }
+            }
+        } catch (Exception ignore) {}
+        return -1;
+    }
+
+    private Object findNpcOnMapAnyVector(int id) {
+        if (!reflectionReady) initReflection();
+        try {
+            Object zInst = getZ();
+            if (zInst == null) return null;
+            Field[] vectors = new Field[]{ zFieldF, zFieldE, zFieldO, zFieldD };
+            for (Field vf : vectors) {
+                if (vf == null) continue;
+                Object vObj = vf.get(zInst);
+                if (!(vObj instanceof java.util.Vector)) continue;
+                java.util.Vector<?> list = (java.util.Vector<?>) vObj;
+                for (int i = 0; i < list.size(); i++) {
+                    Object e = list.elementAt(i);
+                    if (e != null && getEntityId(e) == id) return e;
+                }
+            }
+        } catch (Exception ignore) {}
+        return null;
+    }
+
+    private int[] findQuizTsunadeNpc(java.util.Set<Integer> ignoredIds) {
+        if (!reflectionReady) initReflection();
+        try {
+            Object zInst = getZ();
+            if (zInst == null) return null;
+
+            int[] bestNpc = null;
+            int bestScore = -999999;
+
+            Field[] vectorsToScan = new Field[]{ zFieldF, zFieldE, zFieldO, zFieldD };
+            String[] vecNames = new String[]{ "z.F (NPC)", "z.E (Mob)", "z.O (Boss)", "z.D (Char)" };
+
+            for (int vIdx = 0; vIdx < vectorsToScan.length; vIdx++) {
+                Field vf = vectorsToScan[vIdx];
+                if (vf == null) continue;
+                Object vObj = vf.get(zInst);
+                if (!(vObj instanceof java.util.Vector)) continue;
+                java.util.Vector<?> list = (java.util.Vector<?>) vObj;
+
+                for (int i = 0; i < list.size(); i++) {
+                    Object e = list.elementAt(i);
+                    if (e == null) continue;
+
+                    int id = getEntityId(e);
+                    if (id <= 0) continue;
+                    if (ignoredIds != null && ignoredIds.contains(Integer.valueOf(id))) continue;
+
+                    String name = getEntityName(e);
+                    if (name == null || name.isEmpty()) continue;
+                    String lower = boDau(name);
+                    int maxHp = getEntityMaxHp(e);
+                    int curHp = getEntityHp(e);
+                    short x = getEntityX(e);
+                    short y = getEntityY(e);
+
+                    // CHẶN HOÀN TOÀN CON TSUNADE TĨNH: 100 máu hoặc đứng ở (970, 564)
+                    if (Math.hypot(x - 970, y - 564) < 120 || maxHp == 100) {
+                        continue;
+                    }
+
+                    if (!lower.contains("tsunade") && !lower.contains("senju") && !lower.contains("trac nghiem")
+                            && !lower.contains("cau hoi") && !lower.contains("event") && !lower.contains("su kien")
+                            && maxHp < 10000) {
+                        continue;
+                    }
+
+                    int score = 0;
+                    if (maxHp >= 10000) score += 100000; // Ưu tiên con có 100.000 HP
+                    if (lower.contains("tsunade") || lower.contains("senju")) score += 50000;
+
+                    System.out.println("[Quiz Scan " + vecNames[vIdx] + "] Candidate: '" + name + "' (ID=" + id + ") HP=" + curHp + "/" + maxHp + " at (" + x + "," + y + ") score=" + score);
+
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestNpc = new int[]{ id, x, y };
+                    }
+                }
+            }
+
+            if (bestNpc != null) {
+                System.out.println("[Quiz Scan] -> SELECTED BEST QUIZ NPC: ID=" + bestNpc[0] + " at (" + bestNpc[1] + "," + bestNpc[2] + ")");
+                return bestNpc;
+            }
+        } catch (Exception e) {
+            log("findQuizTsunadeNpc error: " + e.getMessage());
         }
         return null;
     }
@@ -5047,13 +5286,17 @@ public class TaskManager {
             if (zInst == null) return null;
             java.util.Vector<?> dialogStack = (java.util.Vector<?>) fkFieldAn.get(zInst);
             if (dialogStack == null || dialogStack.isEmpty()) return null;
-            Object topPanel = dialogStack.lastElement();
-            if (topPanel == null || !auClass.isInstance(topPanel)) return null;
-            return (String[]) auFieldMenuItems.get(topPanel);
+
+            for (int i = dialogStack.size() - 1; i >= 0; i--) {
+                Object panel = dialogStack.get(i);
+                if (panel != null && auClass.isInstance(panel)) {
+                    return (String[]) auFieldMenuItems.get(panel);
+                }
+            }
         } catch (Exception e) {
             log("readDialogMenuItems error: " + e.getMessage());
-            return null;
         }
+        return null;
     }
 
     /**
@@ -12352,10 +12595,11 @@ public class TaskManager {
             if (reflectionReady) tickDaiHoi(System.currentTimeMillis());
         }
 
-        // Auto Quiz NPC — máy riêng, hoạt động ĐƠN, chạy độc lập với cờ Auto NV.
+        // Auto Quiz NPC — máy riêng, hoạt động ĐƠN, chạy độc quyền không bị module khác can thiệp.
         if (quizStep > 0) {
             if (!reflectionReady) initReflection();
             if (reflectionReady) tickQuiz(System.currentTimeMillis());
+            return;
         }
 
         // Bám theo lead — KHÔNG phải máy độc lập: nó là phần phụ của Cấm thuật / Ải gia tộc /
@@ -14101,6 +14345,10 @@ public class TaskManager {
                     }
                 }
 
+                System.out.println("[NPC PROBE CONSOLE] Opened NPC: " + npcName + " (ID=" + npcId + ") Map=" + mapId + " Pos=(" + x + "," + y + ")");
+                System.out.println("   -> Menu: [" + menuSb.toString() + "]");
+                if (!question.isEmpty()) System.out.println("   -> Question: \"" + question + "\"");
+
                 java.io.PrintWriter w = Auto.getWriter();
                 if (w != null) {
                     w.print("{\"type\":\"npc_clicked_probe\",\"username\":\"" + escapeJson(Auto.getUsername()) + "\""
@@ -14131,16 +14379,17 @@ public class TaskManager {
     // AUTO QUIZ NPC EVENT SYSTEM
     // ------------------------------------------------------------------
     private static final int QUIZ_STEP_IDLE = 0;
-    private static final int QUIZ_STEP_MOVE_NPC = 1;
-    private static final int QUIZ_STEP_OPEN_NPC = 2;
-    private static final int QUIZ_STEP_CLICK_START = 3;
-    private static final int QUIZ_STEP_READ_QUESTION = 4;
-    private static final int QUIZ_STEP_WAIT_QUERY_RES = 5;
-    private static final int QUIZ_STEP_AUTO_ANSWER = 6;
-    private static final int QUIZ_STEP_WAIT_HUMAN = 7;
-    private static final int QUIZ_STEP_CHECK_TRANSITION = 8;
-    private static final int QUIZ_STEP_ESC_POPUP = 9;
-    private static final int QUIZ_STEP_COOLDOWN = 10;
+    private static final int QUIZ_STEP_MOVE_MAP = 1;
+    private static final int QUIZ_STEP_MOVE_NPC = 2;
+    private static final int QUIZ_STEP_OPEN_NPC = 3;
+    private static final int QUIZ_STEP_CLICK_START = 4;
+    private static final int QUIZ_STEP_READ_QUESTION = 5;
+    private static final int QUIZ_STEP_WAIT_QUERY_RES = 6;
+    private static final int QUIZ_STEP_AUTO_ANSWER = 7;
+    private static final int QUIZ_STEP_WAIT_HUMAN = 8;
+    private static final int QUIZ_STEP_CHECK_TRANSITION = 9;
+    private static final int QUIZ_STEP_ESC_POPUP = 10;
+    private static final int QUIZ_STEP_COOLDOWN = 11;
 
     private int quizStep = QUIZ_STEP_IDLE;
     private long quizNextTime = 0;
@@ -14152,6 +14401,7 @@ public class TaskManager {
     private String quizSelectedAnswer = "";
     private long quizAnswerTime = 0;
     private long quizCooldownUntil = 0;
+    private int quizNotFoundCount = 0;
 
     private java.util.Set<Integer> quizIgnoredNpcIds = new java.util.HashSet<Integer>();
     private int quizClickStartRetry = 0;
@@ -14160,16 +14410,17 @@ public class TaskManager {
         if (!reflectionReady) initReflection();
         stopCurrentActivity();
         this.quizNpcId = npcId;
-        this.quizStep = QUIZ_STEP_MOVE_NPC;
+        this.quizStep = (npcId > 0) ? QUIZ_STEP_OPEN_NPC : QUIZ_STEP_MOVE_MAP;
         this.quizNextTime = 0;
         this.quizLastQuestion = "";
         this.quizQueryQuestion = "";
         this.quizQueryResAnswer = null;
         this.quizQueryPending = false;
         this.quizSelectedAnswer = "";
+        this.quizNotFoundCount = 0;
         this.quizIgnoredNpcIds.clear();
         this.quizClickStartRetry = 0;
-        log("Auto Quiz NPC: bat dau");
+        log("Auto Quiz NPC: bat dau quy trinh");
         pushQuizStatus("Bat dau Auto Quiz NPC...");
         return "da bat dau Auto Quiz NPC";
     }
@@ -14180,6 +14431,28 @@ public class TaskManager {
             pushQuizStatus("Da dung Auto Quiz NPC");
         }
         this.quizStep = QUIZ_STEP_IDLE;
+    }
+
+    private void quizHandOffToAfk() {
+        try {
+            int nowMap = getCurrentMapId();
+            if (afkMapId > 0 && getSettingInt("quiz_after_afk", 1) == 1) {
+                afkZoneChanged = false;
+                autoCombatRequested = false;
+                setEnabled(true);
+                setState(TaskState.AFK_FARM);
+                stopQuiz();
+                log("Quiz: Hoan thanh/Het su kien -> chuyen sang treo map " + afkMapId + " khu " + afkZone);
+                pushQuizStatus("Hết sự kiện! Đang di chuyển về bãi AFK farm (Map " + afkMapId + " khu " + afkZone + ")...");
+            } else {
+                stopQuiz();
+                log("Quiz: Hoan thanh (chua cau hinh afkMapId)");
+                pushQuizStatus("Đã kết thúc Auto Quiz NPC.");
+            }
+        } catch (Exception e) {
+            log("quizHandOffToAfk error: " + e);
+            stopQuiz();
+        }
     }
 
     public void onQuizQueryRes(String question, String correctAnswer) {
@@ -14230,7 +14503,36 @@ public class TaskManager {
         if (now < quizNextTime) return;
 
         switch (quizStep) {
+            case QUIZ_STEP_MOVE_MAP: {
+                int targetMap = getSettingInt("quiz_map", 86);
+                int curMap = getMapAnToan();
+                if (curMap != targetMap && curMap > 0) {
+                    log("Quiz: Di chuyen sang map Quiz " + targetMap + " (map hien tai: " + curMap + ")");
+                    pushQuizStatus("Đang di chuyển tới Trường Konoha (Map " + targetMap + ")...");
+                    try { navigateToMap(targetMap); } catch (Exception ignore) {}
+                    quizNextTime = now + 2500;
+                    return;
+                }
+
+                // Đã ở Map 86 -> Vào thẳng bước tương tác NPC, KHÔNG đổi khu!
+                quizStep = QUIZ_STEP_MOVE_NPC;
+                quizNextTime = now + 200;
+                break;
+            }
+
             case QUIZ_STEP_MOVE_NPC: {
+                // ƯU TIÊN 1: Nếu bảng thoại đang mở sẵn trên màn hình, KHÔNG ĐI ĐÂU CẢ!
+                String[] curMenu = readDialogMenuItems();
+                String curQ = readDialogQuestionText();
+                if ((curMenu != null && curMenu.length > 0) || (curQ != null && !curQ.trim().isEmpty())) {
+                    int dlgNpcId = readDialogNpcId();
+                    if (dlgNpcId > 0) this.quizNpcId = dlgNpcId;
+                    System.out.println("[Quiz Debug] Bảng thoại NPC đang mở sẵn trên màn hình! (npcId=" + quizNpcId + "). Bắt đầu đọc menu/câu hỏi ngay...");
+                    quizStep = QUIZ_STEP_CLICK_START;
+                    quizNextTime = now + 200;
+                    return;
+                }
+
                 int[] dlg = detectDialog();
                 if (dlg != null && dlg[0] >= 0 && !quizIgnoredNpcIds.contains(Integer.valueOf(dlg[0]))) {
                     this.quizNpcId = dlg[0];
@@ -14238,26 +14540,39 @@ public class TaskManager {
                     quizNextTime = now + 300;
                     return;
                 }
+
                 int targetNpc = quizNpcId;
                 int nx = -1, ny = -1;
+
+                // ƯU TIÊN 2: Nếu người chơi đang nhắm/click vào con NPC trên màn hình (z.a)
+                if ((targetNpc <= 0 || quizIgnoredNpcIds.contains(Integer.valueOf(targetNpc))) && zFieldTarget != null) {
+                    try {
+                        Object targetObj = zFieldTarget.get(getZ());
+                        if (targetObj != null) {
+                            int tId = getEntityId(targetObj);
+                            if (tId > 0 && !quizIgnoredNpcIds.contains(Integer.valueOf(tId))) {
+                                targetNpc = tId;
+                                nx = getEntityX(targetObj);
+                                ny = getEntityY(targetObj);
+                                System.out.println("[Quiz Debug] Nhận diện NPC mục tiêu từ con đang trỏ (z.a): ID=" + tId + " Pos=(" + nx + "," + ny + ")");
+                            }
+                        }
+                    } catch (Exception ignore) {}
+                }
+
+                // ƯU TIÊN 3: Quét toàn bộ map (z.F, z.E, z.O, z.D) tìm con Tsunade 100k máu
                 if (targetNpc <= 0 || quizIgnoredNpcIds.contains(Integer.valueOf(targetNpc))) {
-                    int[] npcData = findNpcByName("Tsunade", quizIgnoredNpcIds);
-                    if (npcData == null) npcData = findNpcByName("Câu hỏi", quizIgnoredNpcIds);
-                    if (npcData == null) npcData = findNpcByName("Event", quizIgnoredNpcIds);
-                    if (npcData == null) npcData = findNpcByName("Sự kiện", quizIgnoredNpcIds);
-                    if (npcData == null) npcData = findNpcByName("Npc", quizIgnoredNpcIds);
+                    int[] npcData = findQuizTsunadeNpc(quizIgnoredNpcIds);
                     if (npcData != null) {
                         targetNpc = npcData[0];
                         nx = npcData[1];
                         ny = npcData[2];
                     }
                 } else {
-                    Object npcObj = findNpcOnMap(targetNpc);
-                    if (npcObj != null && frFieldAr != null && frFieldAs != null) {
-                        try {
-                            nx = frFieldAr.getShort(npcObj);
-                            ny = frFieldAs.getShort(npcObj);
-                        } catch (Exception ignore) {}
+                    Object npcObj = findNpcOnMapAnyVector(targetNpc);
+                    if (npcObj != null) {
+                        nx = getEntityX(npcObj);
+                        ny = getEntityY(npcObj);
                     }
                 }
                 if (targetNpc > 0) {
@@ -14269,14 +14584,26 @@ public class TaskManager {
                             double dist = Math.hypot(nx - curX, ny - curY);
                             if (dist > NPC_INTERACT_RANGE) {
                                 navigateTo(getCurrentMapId(), nx, ny);
-                                quizNextTime = now + 1000;
+                                quizNextTime = now + 800;
                                 return;
                             }
                         } catch (Exception ignore) {}
                     }
+                    quizStep = QUIZ_STEP_OPEN_NPC;
+                    quizNextTime = now + 300;
+                    return;
                 }
-                quizStep = QUIZ_STEP_OPEN_NPC;
-                quizNextTime = now + 400;
+
+                quizNotFoundCount++;
+                if (quizNotFoundCount >= 5) {
+                    log("Quiz: 5 lan quet khong thay NPC Quiz hop le -> HET SU KIEN. Ve AFK farm...");
+                    pushQuizStatus("Hết sự kiện Quiz! Đang tự động trở về bãi AFK farm...");
+                    quizHandOffToAfk();
+                    return;
+                }
+
+                pushQuizStatus("Đang quét tìm NPC Quiz trên map... (lần " + quizNotFoundCount + "/5)");
+                quizNextTime = now + 2000;
                 break;
             }
 
@@ -14292,11 +14619,18 @@ public class TaskManager {
             case QUIZ_STEP_CLICK_START: {
                 String[] menu = readDialogMenuItems();
                 if (menu != null && menu.length > 0) {
-                    int startIdx = findMenuIndexByKeyword(menu, "bắt đầu");
+                    int startIdx = findMenuIndexByKeyword(menu, "trắc nghiệm");
+                    if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "trac nghiem");
+                    if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "nhẫn giả");
+                    if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "nhan gia");
+                    if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "kiến thức");
+                    if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "kien thuc");
+                    if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "bắt đầu");
                     if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "tra loi");
                     if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "bat dau");
                     if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "câu hỏi");
                     if (startIdx >= 0) {
+                        System.out.println("[Quiz Console Log] -> Tim thay nut '" + menu[startIdx] + "' [index " + startIdx + "]. Dang bam...");
                         try { sendSelectMenu(quizNpcId, startIdx); } catch (Exception ignore) {}
                         quizStep = QUIZ_STEP_READ_QUESTION;
                         quizNextTime = now + 800;
@@ -14321,6 +14655,14 @@ public class TaskManager {
                     quizClickStartRetry = 0;
                     closeCurrentDialog();
                     closeAnyDialog();
+
+                    quizNotFoundCount++;
+                    if (quizNotFoundCount >= 5) {
+                        log("Quiz: Het su kien (5 lan khong co nut Bat dau tra loi). Ve AFK farm...");
+                        quizHandOffToAfk();
+                        return;
+                    }
+
                     quizStep = QUIZ_STEP_MOVE_NPC;
                     quizNextTime = now + 500;
                     return;
@@ -14336,6 +14678,22 @@ public class TaskManager {
                     return;
                 }
 
+                // KIỂM TRA TEXT PHẠT: "Trả lời sai, vui lòng chờ 30 giây"
+                String lowerBoDau = boDau(qText);
+                if (lowerBoDau.contains("tra loi sai") || lowerBoDau.contains("cho 30 giay")
+                        || lowerBoDau.contains("30 giay") || lowerBoDau.contains("phat")) {
+                    log("Quiz: Penalty text detected in dialog: '" + qText + "' -> Cooldown 30s!");
+                    pushQuizStatus("Trả lời sai! Bị phạt chờ 30 giây...");
+                    quizSelectedAnswer = ""; // HỦY, KHÔNG ghi đáp án sai vào DB!
+                    quizLastQuestion = "";
+                    quizStep = QUIZ_STEP_ESC_POPUP;
+                    quizNextTime = now + 200;
+                    return;
+                }
+
+                quizNotFoundCount = 0;
+
+                // Nếu câu hỏi trước đó đổi sang câu hỏi mới hợp lệ VÀ đã chọn đáp án -> Ghi nhận đáp án đúng
                 if (!quizLastQuestion.isEmpty() && !quizLastQuestion.equalsIgnoreCase(qText) && !quizSelectedAnswer.isEmpty()) {
                     log("Quiz: Question changed! Recording correct answer: " + quizLastQuestion + " -> " + quizSelectedAnswer);
                     pushQuizRecordCorrect(quizLastQuestion, quizSelectedAnswer);
@@ -14390,17 +14748,32 @@ public class TaskManager {
             }
 
             case QUIZ_STEP_WAIT_HUMAN: {
+                String curQ = readDialogQuestionText();
+                if (curQ != null && !curQ.trim().isEmpty()) {
+                    String lower = boDau(curQ);
+                    if (lower.contains("tra loi sai") || lower.contains("cho 30 giay")
+                            || lower.contains("30 giay") || lower.contains("phat")) {
+                        log("Quiz: Penalty text detected in WAIT_HUMAN: " + curQ);
+                        pushQuizStatus("Trả lời sai! Bị phạt chờ 30 giây...");
+                        quizSelectedAnswer = "";
+                        quizLastQuestion = "";
+                        quizStep = QUIZ_STEP_ESC_POPUP;
+                        quizNextTime = now + 200;
+                        return;
+                    }
+                    if (!curQ.equalsIgnoreCase(quizLastQuestion)) {
+                        quizStep = QUIZ_STEP_READ_QUESTION;
+                        quizNextTime = now + 200;
+                        return;
+                    }
+                }
+
                 String confirmText = readConfirmPopupText();
                 if (confirmText != null && (confirmText.contains("30") || confirmText.toLowerCase().contains("cho") || confirmText.toLowerCase().contains("phat"))) {
                     log("Quiz: Penalty popup detected: " + confirmText);
+                    quizSelectedAnswer = "";
+                    quizLastQuestion = "";
                     quizStep = QUIZ_STEP_ESC_POPUP;
-                    quizNextTime = now + 200;
-                    return;
-                }
-
-                String curQ = readDialogQuestionText();
-                if (curQ != null && !curQ.trim().isEmpty() && !curQ.equalsIgnoreCase(quizLastQuestion)) {
-                    quizStep = QUIZ_STEP_READ_QUESTION;
                     quizNextTime = now + 200;
                     return;
                 }
@@ -14410,17 +14783,32 @@ public class TaskManager {
             }
 
             case QUIZ_STEP_CHECK_TRANSITION: {
+                String curQ = readDialogQuestionText();
+                if (curQ != null && !curQ.trim().isEmpty()) {
+                    String lower = boDau(curQ);
+                    if (lower.contains("tra loi sai") || lower.contains("cho 30 giay")
+                            || lower.contains("30 giay") || lower.contains("phat")) {
+                        log("Quiz: Wrong answer selected! Penalty dialog: " + curQ);
+                        pushQuizStatus("Chọn sai đáp án! Đang chờ phạt 30 giây...");
+                        quizSelectedAnswer = "";
+                        quizLastQuestion = "";
+                        quizStep = QUIZ_STEP_ESC_POPUP;
+                        quizNextTime = now + 200;
+                        return;
+                    }
+                    if (!curQ.equalsIgnoreCase(quizLastQuestion)) {
+                        quizStep = QUIZ_STEP_READ_QUESTION;
+                        quizNextTime = now + 200;
+                        return;
+                    }
+                }
+
                 String confirmText = readConfirmPopupText();
                 if (confirmText != null && (confirmText.contains("30") || confirmText.toLowerCase().contains("cho") || confirmText.toLowerCase().contains("phat"))) {
                     log("Quiz: Wrong answer selected! Penalty popup: " + confirmText);
+                    quizSelectedAnswer = "";
+                    quizLastQuestion = "";
                     quizStep = QUIZ_STEP_ESC_POPUP;
-                    quizNextTime = now + 200;
-                    return;
-                }
-
-                String curQ = readDialogQuestionText();
-                if (curQ != null && !curQ.trim().isEmpty() && !curQ.equalsIgnoreCase(quizLastQuestion)) {
-                    quizStep = QUIZ_STEP_READ_QUESTION;
                     quizNextTime = now + 200;
                     return;
                 }

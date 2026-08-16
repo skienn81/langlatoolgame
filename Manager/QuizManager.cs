@@ -60,21 +60,28 @@ namespace Manager
         {
             lock (_lock)
             {
-                try
+                if (File.Exists(_dbPath))
                 {
-                    if (File.Exists(_dbPath))
+                    try
                     {
                         string json = File.ReadAllText(_dbPath, Encoding.UTF8);
                         var data = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
                         if (data != null)
                         {
-                            _quizDb = new Dictionary<string, string>(data, StringComparer.OrdinalIgnoreCase);
+                            _quizDb = data;
+                            // Clean invalid keys
+                            var invalidKeys = _quizDb.Keys.Where(k => k.Contains("tra loi sai") || k.Contains("cho 30 giay") || k.Contains("30 giay") || k.Contains("xin chao") || k.Contains("cao tu")).ToList();
+                            if (invalidKeys.Count > 0)
+                            {
+                                foreach (var k in invalidKeys) _quizDb.Remove(k);
+                                SaveDatabase();
+                            }
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("Error loading quiz db: " + ex.Message);
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Error loading quiz db: " + ex.Message);
+                    }
                 }
             }
         }
@@ -114,6 +121,11 @@ namespace Manager
         {
             string norm = NormalizeText(rawQuestion);
             if (string.IsNullOrEmpty(norm) || string.IsNullOrWhiteSpace(rawAnswer)) return false;
+
+            if (norm.Contains("tra loi sai") || norm.Contains("cho 30 giay") || norm.Contains("30 giay") || norm.Contains("xin chao") || norm.Contains("cao tu"))
+            {
+                return false;
+            }
 
             lock (_lock)
             {
