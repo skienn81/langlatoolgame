@@ -1531,6 +1531,28 @@ public class Auto {
             } catch (Exception e) {
                 System.out.println("[MyBot] tinh_thach_stop error: " + e.getMessage());
             }
+        } else if (line.contains("\"command\":\"quiz_start\"")) {
+            try {
+                int npcId = parseIntParam(line, "npcId", -1);
+                System.out.println("[MyBot] " + TaskManager.getInstance().startQuiz(npcId));
+            } catch (Exception e) {
+                System.out.println("[MyBot] quiz_start error: " + e.getMessage());
+            }
+        } else if (line.contains("\"command\":\"quiz_stop\"")) {
+            try {
+                TaskManager.getInstance().stopQuiz();
+                System.out.println("[MyBot] Quiz stopped");
+            } catch (Exception e) {
+                System.out.println("[MyBot] quiz_stop error: " + e.getMessage());
+            }
+        } else if (line.contains("\"command\":\"quiz_query_res\"")) {
+            try {
+                String qText = parseStringParam(line, "question", "");
+                String cAns = parseStringParam(line, "correctAnswer", "");
+                TaskManager.getInstance().onQuizQueryRes(qText, cAns);
+            } catch (Exception e) {
+                System.out.println("[MyBot] quiz_query_res error: " + e.getMessage());
+            }
         } else if (line.contains("\"command\":\"gom_lead_start\"")) {
             try {
                 System.out.println("[MyBot] " + TaskManager.getInstance().startGomLead());

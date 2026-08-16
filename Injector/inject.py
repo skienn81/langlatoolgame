@@ -10,7 +10,7 @@ poc_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # THƯ MỤC CÀI GAME — chỉnh dòng này cho khớp máy bạn, hoặc đặt biến môi trường LANGLA_GAME.
 # Cần vì script mượn JRE của game làm trình biên dịch và mượn gdx.jar làm classpath.
-game_dir = os.environ.get("LANGLA_GAME", r"C:\Games\LangLa")
+game_dir = os.environ.get("LANGLA_GAME", r"D:\Games\TheGioiLangLa")
 if not os.path.isdir(game_dir):
     print("Khong thay thu muc game:", game_dir)
     print("Sua bien game_dir trong Injector/inject.py, hoac dat bien moi truong LANGLA_GAME.")

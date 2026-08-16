@@ -51,6 +51,18 @@ namespace Manager
         // ── Khởi động / dọn ────────────────────────────────────────────────
         private void KhoiDongTheoDoi()
         {
+            // Khởi động bộ lập lịch hẹn giờ
+            _scheduler = new TaskScheduler();
+            _scheduler.Start(
+                async cmdLine =>
+                {
+                    string result = "";
+                    await XuLyLenhTelegramAsync(cmdLine, r => result = r);
+                    return result;
+                },
+                Log,
+                msg => _tele?.Gui(msg));
+
             TelegramCauHinh.TaoMauNeuThieu();
             var cf = TelegramCauHinh.Doc();
             _tele = new TelegramBot(cf, Log);
@@ -64,11 +76,12 @@ namespace Manager
 
             _ = _tele.KiemTraAsync();
 
-            // ĐỌC TIN TRẢ LỜI TỪ NHÓM — đường về, trước bản này Manager chỉ biết gửi đi.
-            // Chỉ dùng cho một việc: người dùng reply mã captcha vào tin ảnh bùa uế thổ. Định
-            // tuyến bằng chính message_id của tin ảnh nên không cần gõ tên nick, và hai nick dính
-            // bùa cùng lúc cũng không lẫn.
-            _tele.BatDauDocTraLoi((replyToId, text) => NhanMaCaptchaTuTele(replyToId, text));
+            // ĐỌC TIN NHẮN TỪ NHÓM / CHAT:
+            // 1. Reply tin ảnh captcha -> giải bùa uế thổ
+            // 2. Tin nhắn lệnh (/agt, /nv, /hengio, /team, ...) -> điều khiển Manager
+            _tele.BatDauDocTinNhan(
+                (replyToId, text) => NhanMaCaptchaTuTele(replyToId, text),
+                (cmdText, repCallback) => _ = XuLyLenhTelegramAsync(cmdText, repCallback));
 
             if (cf.BangTrangThai)
             {
@@ -84,6 +97,7 @@ namespace Manager
 
         private void DungTheoDoi()
         {
+            try { _scheduler?.Dispose(); } catch { }
             try { _teleTimer?.Stop(); } catch { }
             try { _tele?.Dispose(); } catch { }
         }
@@ -442,10 +456,17 @@ namespace Manager
             var moiNick = new List<string>();
             foreach (var kv in _teamCuaNick) moiNick.Add(kv.Key);
             foreach (var u in _theoDoi.Keys) if (!moiNick.Contains(u, StringComparer.OrdinalIgnoreCase)) moiNick.Add(u);
+            if (_config != null && _config.Accounts != null)
+            {
+                foreach (var acc in _config.Accounts)
+                {
+                    if (!string.IsNullOrWhiteSpace(acc.Username) && !moiNick.Contains(acc.Username, StringComparer.OrdinalIgnoreCase))
+                        moiNick.Add(acc.Username);
+                }
+            }
 
             int onl = moiNick.Count(IsLoggedIn);
-            sb.Append($"🟢 {onl}/{moiNick.Count} nick trong game");
-            sb.Append('\n');
+            sb.Append($"🟢 {onl}/{moiNick.Count} nick trong game\n");
 
             foreach (var team in moiNick.Select(TeamCuaNick).Distinct()
                                         .OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
@@ -454,7 +475,8 @@ namespace Manager
                                    .OrderBy(u => u, StringComparer.OrdinalIgnoreCase).ToList();
                 if (nicks.Count == 0) continue;
 
-                sb.Append($"\n<b>── Team {TelegramBot.Esc(team.Length > 0 ? team : "?")} ──</b>\n");
+                string teamTitle = team.Length > 0 ? $"Team {team}" : "Chưa phân team";
+                sb.Append($"\n<b>── {TelegramBot.Esc(teamTitle)} ──</b>\n");
                 foreach (var u in nicks)
                 {
                     bool onlNick = IsLoggedIn(u);
@@ -464,14 +486,14 @@ namespace Manager
                     sb.Append($"<b>{TelegramBot.Esc(u)}</b>");
 
                     string ch = GetCharName(u);
-                    if (ch.Length > 0) sb.Append($" <i>{TelegramBot.Esc(ch)}</i>");
+                    if (ch.Length > 0) sb.Append($" (<i>{TelegramBot.Esc(ch)}</i>)");
 
                     if (t != null && t.HoatDong.Length > 0)
                     {
                         sb.Append($" · {TelegramBot.Esc(t.HoatDong)}");
                         if (t.Buoc.Length > 0) sb.Append($": {TelegramBot.Esc(CatNgan(t.Buoc, 60))}");
                     }
-                    else if (!onlNick) sb.Append(" · chưa vào game");
+                    else if (!onlNick) sb.Append(" · <i>chưa vào game</i>");
 
                     if (t != null && t.DaGui.Count > 0)
                         sb.Append($"\n     📤 {TelegramBot.Esc(CatNgan(string.Join(", ", t.DaGui), 90))}");

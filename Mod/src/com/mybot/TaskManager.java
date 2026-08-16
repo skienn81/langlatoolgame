@@ -2083,6 +2083,10 @@ public class TaskManager {
      */
     @SuppressWarnings("unchecked")
     private int[] findNpcByName(String nameKeyword) {
+        return findNpcByName(nameKeyword, null);
+    }
+
+    private int[] findNpcByName(String nameKeyword, java.util.Set<Integer> ignoredIds) {
         if (!reflectionReady || zFieldF == null || frClass == null || fsClass == null) return null;
         try {
             Object zInst = getZ();
@@ -2104,12 +2108,14 @@ public class TaskManager {
             String kw = nameKeyword.toLowerCase();
             for (Object npc : npcVector) {
                 if (npc == null || !frClass.isInstance(npc)) continue;
+                int npcId = frFieldAZ.getInt(npc);
+                if (ignoredIds != null && ignoredIds.contains(Integer.valueOf(npcId))) continue;
                 Object template = frGetTemplate.invoke(npc);
                 if (template == null) continue;
                 Object nameObj = fsFieldL.get(template);
                 if (!(nameObj instanceof String)) continue;
                 if (!((String) nameObj).toLowerCase().contains(kw)) continue;
-                return new int[]{ frFieldAZ.getInt(npc), frFieldAr.getShort(npc), frFieldAs.getShort(npc) };
+                return new int[]{ npcId, frFieldAr.getShort(npc), frFieldAs.getShort(npc) };
             }
         } catch (Exception e) {
             log("findNpcByName error: " + e.getMessage());
@@ -2829,6 +2835,10 @@ public class TaskManager {
                 }
                 resetSonCap();
             }
+            if (quizStep > 0) {
+                what.append("Quiz ");
+                quizStep = QUIZ_STEP_IDLE;
+            }
             setAutoCombat(false);
             autoCombatRequested = false;
             setEnabled(false);
@@ -2858,6 +2868,7 @@ public class TaskManager {
             resetAgt();
             resetDaiHoi();      // Đại hội cũng chạy TRƯỚC cổng `enabled`, hạ cờ đó không dừng được nó
             resetFollow();      // bám theo là phần PHỤ của ba máy trên, không được sống lâu hơn chúng
+            quizStep = QUIZ_STEP_IDLE;
 
             setAutoCombat(false);
             // Xoá luôn MỤC TIÊU đang đánh. Tắt cờ auto đánh không đụng tới z.a, nên nhân vật vừa
@@ -7050,6 +7061,8 @@ public class TaskManager {
     private boolean agtDidOpen = false;   // nick mở cửa: đã bấm 'Mở cửa ải' xong chưa
     private boolean agtSawMobs = false;   // đã THẤY quái trong cổng này ít nhất một lần chưa
     private long agtInGateAt = 0;         // lúc vào cổng hiện tại, để đếm hạn chờ sinh quái
+    private boolean agtCanTryOpen = false; // cờ thử Mở cửa ải nếu bấm Vào ải mà map không đổi
+    private int agtAttempts = 0;          // số lần thử mở/vào ải thất bại
 
     private void resetAgt() {
         agtStep = 0; agtRole = 0; agtNextTime = 0; agtDeadline = 0;
@@ -7057,7 +7070,7 @@ public class TaskManager {
         agtLastX = -99999; agtLastY = -99999; agtStuckTries = 0; agtNextDiag = 0;
         agtGateMap = -1; agtDidOpen = false;
         agtClearAt = 0; agtNextMoveTry = 0; agtLastAlive = -2;
-        agtSawMobs = false; agtInGateAt = 0;
+        agtSawMobs = false; agtInGateAt = 0; agtCanTryOpen = false; agtAttempts = 0;
     }
 
     private int agtMap() {
@@ -7174,11 +7187,11 @@ public class TaskManager {
         if (!reflectionReady) return "LOI: reflection chua san sang";
         stopCurrentActivity();
         resetAgt();
-        agtRole = (role == 1) ? 1 : 2;
+        agtRole = 2;
         agtStep = AGT_GOTO_MAP;
         agtDeadline = System.currentTimeMillis() + getSettingInt("agt_timeout_ms", 300000);
-        log("AGT: bat dau vai " + (agtRole == 1 ? "MO CUA AI" : "VAO AI"));
-        return "da bat dau AGT (" + (agtRole == 1 ? "mo cua" : "vao ai") + ")";
+        log("AGT: bat dau chay Ải gia tộc");
+        return "da bat dau AGT";
     }
 
     /** Manager báo cửa ải đã mở → member được phép bấm mục "Vào ải gia tộc". */
@@ -10620,7 +10633,13 @@ public class TaskManager {
                         // NPC có tên nằm ở bản mẫu riêng (a.fs), không phải ở trường ad. In ra để
                         // đối chiếu thẳng: danh sách NPC thật của map trông như thế nào.
                         String npcTen = npcNameOf(e);
-                        if (npcTen != null) ds.append(" NPC='").append(npcTen).append("'");
+                        if (npcTen != null) {
+                            ds.append(" [NPC] Tên='").append(npcTen).append("'");
+                            try {
+                                if (frFieldAZ != null) ds.append(" EntityID=").append(frFieldAZ.getInt(e));
+                                if (frFieldAh != null) ds.append(" TemplateID=").append(frFieldAh.getShort(e));
+                            } catch (Exception ignore) {}
+                        }
                         // TÊN THẬT của quái nằm ở BẢN MẪU (a.fo.l), không phải ở a.fn.ad — trường
                         // ad rỗng với mọi con đã gặp. Danh hiệu (a.fo.v) là thứ tách boss khỏi
                         // quái thường: 'Bọ rùa' để trống, còn 'Gamatatsu' mang 'Linh thú'.
@@ -10745,24 +10764,14 @@ public class TaskManager {
                     return;
                 }
                 agtProgress("da toi cho NPC - " + agtWhereAmI());
-                // Người MỞ đi thẳng; người VÀO phải chờ tín hiệu, vì mục "Vào ải" chỉ có tác dụng
-                // sau khi cửa ải đã được mở.
-                agtStep = (agtRole == 1) ? AGT_OPEN_NPC : AGT_WAIT_SIGNAL;
+                agtStep = AGT_OPEN_NPC;
                 agtNextTime = now + stepMs;
                 return;
             }
 
             if (agtStep == AGT_WAIT_SIGNAL) {
-                if (agtSignal) {
-                    agtStep = AGT_OPEN_NPC;
-                    agtNextTime = now + stepMs;
-                    return;
-                }
-                if (now >= agtNextDiag) {
-                    agtNextDiag = now + getSettingInt("agt_diag_ms", 15000);
-                    agtProgress("dang cho tin hieu cua ai mo - " + agtWhereAmI());
-                }
-                agtNextTime = now + getSettingInt("agt_wait_poll_ms", 1500);
+                agtStep = AGT_OPEN_NPC;
+                agtNextTime = now + stepMs;
                 return;
             }
 
@@ -10786,21 +10795,19 @@ public class TaskManager {
                 agtProgress("menu NPC: " + sb);
 
                 String parentKw = getSetting("agt_parent_keyword", "gia toc");
-                // Nick mở cửa bấm "Mở cửa ải" TRƯỚC; mở xong rồi thì chính nó cũng bấm
-                // "Vào ải gia tộc" như mọi người (agt_leader_also_enters).
-                String subKw = (agtRole == 1 && !agtDidOpen)
+                // Ưu tiên bấm "Vào ải gia tộc". Nếu lần trước map không đổi thì thử bấm "Mở cửa ải" (Tộc trưởng)
+                String subKw = agtCanTryOpen
                         ? getSetting("agt_open_keyword", "mo cua ai")
                         : getSetting("agt_enter_keyword", "vao ai gia toc");
+
                 int[] hit = agtFindMenu(menu, parentKw, subKw);
+                if (hit == null && agtCanTryOpen) {
+                    // Nếu không có mục "Mở cửa ải" trong menu thì lùi về mục "Vào ải gia tộc"
+                    subKw = getSetting("agt_enter_keyword", "vao ai gia toc");
+                    hit = agtFindMenu(menu, parentKw, subKw);
+                }
+
                 if (hit == null) {
-                    // PHÂN BIỆT HAI NGUYÊN NHÂN — trước đây gộp làm một nên đọc log không biết
-                    // phải sửa gì:
-                    //  · không thấy cả mục cha  -> sai từ khoá agt_parent_keyword
-                    //  · thấy mục cha nhưng chuỗi KHÔNG có dấu phẩy -> mục con KHÔNG nằm sẵn
-                    //    trong chuỗi, tức bấm mục cha phải gửi gói lên server rồi chờ server trả
-                    //    về danh sách mới. Lúc đó phải bấm HAI BƯỚC (sendSelectMenu rồi đọc lại
-                    //    menu), chứ đường 3 byte hiện tại không dùng được.
-                    //  · thấy cả hai nhưng không khớp -> sai từ khoá mục con.
                     int iCha = -1;
                     boolean chaCoDauPhay = false;
                     String pNo = noAccent(parentKw);
@@ -10816,13 +10823,9 @@ public class TaskManager {
                     if (iCha < 0) {
                         vi = "KHONG thay muc cha '" + parentKw + "' -> sua agt_parent_keyword";
                     } else if (!chaCoDauPhay) {
-                        vi = "thay muc cha '" + parentKw + "' o [" + iCha + "] nhung chuoi KHONG co"
-                           + " dau phay -> muc con KHONG nam san trong chuoi, phai bam HAI BUOC"
-                           + " (gui muc cha len server roi doc lai menu). Duong 3 byte hien tai"
-                           + " khong dung duoc cho NPC nay.";
+                        vi = "thay muc cha '" + parentKw + "' o [" + iCha + "] nhung chuoi KHONG co dau phay";
                     } else {
-                        vi = "co muc cha va co muc con, nhung khong muc con nao khop '" + subKw
-                           + "' -> sua agt_open_keyword / agt_enter_keyword";
+                        vi = "co muc cha va co muc con, nhung khong muc con nao khop '" + subKw + "'";
                     }
                     closeAnyDialog();
                     pushAgt("agt_end", false, vi + " | Menu: " + sb);
@@ -10830,10 +10833,7 @@ public class TaskManager {
                     return;
                 }
 
-                // CHẠY NHÁP: in ra đúng mục sẽ bấm rồi DỪNG, không gửi gói nào.
-                // Mặc định BẬT vì "Mở cửa ải gia tộc" là thao tác của cả gia tộc, chưa biết nó tốn
-                // gì và có giới hạn ngày không — bấm liều một lần là không lấy lại được.
-                if (getSettingInt("agt_dry_run", 1) == 1) {
+                if (getSettingInt("agt_dry_run", 0) == 1) {
                     closeAnyDialog();
                     pushAgt("agt_dry", true, "CHAY NHAP - se bam [" + hit[0] + "]["
                             + hit[1] + "] khop '" + subKw + "'. Doi agt_dry_run,0 de chay that.");
@@ -10852,48 +10852,25 @@ public class TaskManager {
             if (agtStep == AGT_VERIFY) {
                 int nowMap = getCurrentMapId();
                 if (nowMap != agtMapBefore) {
-                    // NHẬN BIẾT THEO MAP ĐÃ BIẾT, không chỉ "map có đổi không".
-                    // Ải gia tộc có hai cổng, đã ghi số map trong cfg. Dùng chúng thì log nói
-                    // được VÀO CỔNG NÀO, và nếu rơi vào map lạ thì lộ ra ngay thay vì im lặng
-                    // coi như thành công — đúng bài học đã trả giá ở phần cấm thuật.
-                    int g1 = getSettingInt("agt_gate1_map", 0);
-                    int g2 = getSettingInt("agt_gate2_map", 0);
-
-                    // ⚠️ NICK MỞ CỬA CŨNG VÀO LUÔN — phải phát tín hiệu Ở ĐÂY.
-                    //
-                    // Giả định cũ: "mở cửa và vào là hai việc khác nhau, nick mở cửa KHÔNG đổi
-                    // map". SAI, và lượt chạy thật 21:05 ngày 29/07 chứng minh: bấm 'mo cua ai'
-                    // xong là map đổi ngay sang 46. Vì thế nhánh phát tín hiệu — vốn nằm ở
-                    // đường "hết giờ mà map không đổi" — KHÔNG BAO GIỜ CHẠY, và 11 nick còn lại
-                    // đứng chờ `dang cho tin hieu cua ai mo` cho tới hết hạn.
-                    //
-                    // Phát ở đây thì tín hiệu dựa trên BẰNG CHỨNG (đã vào được cổng) chứ không
-                    // phải suy ra từ hết giờ — chắc hơn hẳn đường cũ.
-                    if (agtRole == 1 && !agtDidOpen && ((g1 > 0 && nowMap == g1) || (g2 > 0 && nowMap == g2))) {
-                        agtDidOpen = true;
-                        pushAgt("agt_opened", true, "da mo cua ai VA VAO LUON (map " + nowMap
-                                + ") -> bao phan con lai vao");
-                    }
+                    int g1 = getSettingInt("agt_gate1_map", 46);
+                    int g2 = getSettingInt("agt_gate2_map", 47);
 
                     if (g1 > 0 && nowMap == g1) {
                         pushAgt("agt_end", true, "DA VAO AI GIA TOC - CONG 1 (map " + nowMap + ")");
                     } else if (g2 > 0 && nowMap == g2) {
                         pushAgt("agt_end", true, "DA VAO AI GIA TOC - CONG 2 (map " + nowMap + ")");
                     } else {
-                        pushAgt("agt_progress", true, "da doi map sang " + nowMap
-                                + " NHUNG khong khop cong 1 (" + g1 + ") hay cong 2 (" + g2 + ")"
-                                + " - kiem lai agt_gate1_map / agt_gate2_map trong cfg");
+                        pushAgt("agt_progress", true, "da doi map sang " + nowMap);
                     }
-                    // VÀO ẢI XONG = SANG PHA TRÔNG TRONG ẢI, không phải kết thúc.
-                    // Vào là bật đánh rồi để đó: 3 phút đầu chưa có quái, đánh xong hết quái thì
-                    // chờ 30s mới qua cổng 2, cổng 2 cũng chỉ đánh tới lúc game tự đẩy ra làng.
+
+                    pushAgt("agt_in_gate", true, "da vao map " + nowMap);
                     agtGateMap = nowMap;
                     agtStep = AGT_IN_GATE;
-                    agtSawMobs = false;      // cổng mới: chưa thấy con nào, phải chờ sinh quái
+                    agtSawMobs = false;
                     agtInGateAt = now;
                     agtDeadline = agtGateDeadline(now);
                     if (getSettingInt("agt_combat", 1) == 1) {
-                        clearNavTarget();   // bỏ đích cũ, không thì đi bộ thay vì đánh
+                        clearNavTarget();
                         setAutoCombat(true);
                         autoCombatRequested = true;
                     }
@@ -10901,47 +10878,41 @@ public class TaskManager {
                     agtNextTime = now + getSettingInt("agt_poll_ms", 3000);
                     return;
                 }
+
                 if (++agtVerifyWaits > getSettingInt("agt_verify_tries", 6)) {
                     String msg = readAnyDialogText();
                     closeAnyDialog();
-                    if (agtRole == 1 && !agtDidOpen) {
-                        // Người mở cửa ải KHÔNG đổi map — mở cửa và vào là hai việc khác nhau.
-                        // Báo XONG để Manager phát tín hiệu cho phần còn lại, kèm nguyên văn server.
-                        //
-                        // CHỖ YẾU: tới đây là suy ra từ HẾT GIỜ, không phải từ bằng chứng. Bấm
-                        // hỏng (thiếu cống hiến, hôm nay mở rồi, đang thời gian chờ) thì map
-                        // cũng không đổi — và tool sẽ bắn tín hiệu cho 11 nick vào một cửa chưa
-                        // mở. Chốt dưới đây bịt chỗ đó, nhưng để TRỐNG mặc định vì chưa biết
-                        // server báo nguyên văn ra sao. Lượt chạy thật đầu tiên đọc dòng
-                        // "Server bao: ..." rồi điền vào agt_open_ok_keyword là chốt có hiệu lực.
-                        String okKw = getSetting("agt_open_ok_keyword", "");
-                        if (!okKw.isEmpty()
-                                && !(msg != null && noAccent(msg).contains(noAccent(okKw)))) {
-                            pushAgt("agt_end", false, "bam mo cua ai nhung server KHONG bao '"
-                                    + okKw + "'"
-                                    + (msg == null || msg.isEmpty()
-                                        ? " (khong doc duoc dialog)" : ". Server bao: " + msg));
-                            resetAgt();
-                            return;
+                    agtAttempts++;
+                    int maxAttempts = getSettingInt("agt_max_attempts", 5);
+                    if (agtAttempts >= maxAttempts) {
+                        pushAgt("agt_end", false, "Da thu " + agtAttempts + " lan khong vao duoc ai (server bao: "
+                                + (msg == null || msg.isEmpty() ? "khong ro" : msg) + ") -> chuyen sang AFK farm");
+                        if (afkMapId > 0 && getSettingInt("agt_after_afk", 1) == 1) {
+                            afkZoneChanged = false;
+                            setEnabled(true);
+                            setState(TaskState.AFK_FARM);
+                            log("AGT: thu " + agtAttempts + " lan khong thanh cong -> quay ve treo map " + afkMapId + " khu " + afkZone);
                         }
-                        agtDidOpen = true;
-                        pushAgt("agt_opened", true, "da bam mo cua ai gia toc"
-                                + (msg == null || msg.isEmpty() ? "" : ". Server bao: " + msg));
-                        // Mở xong thì chính nó cũng vào ải như mọi người. Nếu gia tộc có luật
-                        // người mở phải đứng ngoài thì đặt agt_leader_also_enters,0.
-                        if (getSettingInt("agt_leader_also_enters", 1) == 1) {
-                            agtStep = AGT_OPEN_NPC;
-                            agtVerifyWaits = 0;
-                            agtNextTime = now + getSettingInt("agt_npc_wait_ms", 600);
-                        } else {
-                            resetAgt();
-                        }
-                    } else {
-                        pushAgt("agt_end", false, "bam roi nhung map van la " + agtMapBefore
-                                + (msg == null || msg.isEmpty() ? "" : ". Server bao: " + msg));
                         resetAgt();
+                        return;
                     }
-                    return;
+                    if (!agtCanTryOpen) {
+                        // Lần thử vào ải chưa đổi map -> đặt cờ để lần sau thử bấm "Mở cửa ải" (nếu là Tộc trưởng)
+                        agtCanTryOpen = true;
+                        agtStep = AGT_OPEN_NPC;
+                        agtVerifyWaits = 0;
+                        agtNextTime = now + getSettingInt("agt_npc_wait_ms", 1000);
+                        agtProgress("map chua doi (lan " + agtAttempts + "/" + maxAttempts + ") -> thu mo/vao lai...");
+                        return;
+                    } else {
+                        // Đã thử cả mục mở ải nhưng map vẫn chưa đổi -> chờ 3s thử lại
+                        agtCanTryOpen = false;
+                        agtStep = AGT_OPEN_NPC;
+                        agtVerifyWaits = 0;
+                        agtNextTime = now + getSettingInt("agt_retry_ms", 3000);
+                        agtProgress("chua vao duoc ai (lan " + agtAttempts + "/" + maxAttempts + ") -> cho 3s thu lai...");
+                        return;
+                    }
                 }
                 agtNextTime = now + getSettingInt("agt_verify_ms", 1000);
                 return;
@@ -12329,6 +12300,8 @@ public class TaskManager {
 
     public void tick() {
 
+        if (reflectionReady) checkNpcClickProbe();
+
         // Nhận chìa Địa cung — chạy độc lập, không cần bật Auto NV
         if (dcStep > 0) {
             if (!reflectionReady) initReflection();
@@ -12377,6 +12350,12 @@ public class TaskManager {
         if (dhStep > 0) {
             if (!reflectionReady) initReflection();
             if (reflectionReady) tickDaiHoi(System.currentTimeMillis());
+        }
+
+        // Auto Quiz NPC — máy riêng, hoạt động ĐƠN, chạy độc lập với cờ Auto NV.
+        if (quizStep > 0) {
+            if (!reflectionReady) initReflection();
+            if (reflectionReady) tickQuiz(System.currentTimeMillis());
         }
 
         // Bám theo lead — KHÔNG phải máy độc lập: nó là phần phụ của Cấm thuật / Ải gia tộc /
@@ -14079,6 +14058,65 @@ public class TaskManager {
         return -1;
     }
 
+    private int npcProbeLastId = -1;
+    private String npcProbeLastQuestion = "";
+
+    private void checkNpcClickProbe() {
+        try {
+            int[] dlg = detectDialog();
+            if (dlg == null || dlg[0] < 0) {
+                npcProbeLastId = -1;
+                npcProbeLastQuestion = "";
+                return;
+            }
+
+            int npcId = dlg[0];
+            String question = readDialogQuestionText();
+            if (question == null) question = "";
+
+            if (npcId != npcProbeLastId || (!question.isEmpty() && !question.equalsIgnoreCase(npcProbeLastQuestion))) {
+                npcProbeLastId = npcId;
+                npcProbeLastQuestion = question;
+
+                Object npcObj = findNpcOnMap(npcId);
+                String npcName = npcNameOf(npcObj);
+                if (npcName == null || npcName.isEmpty()) npcName = "NPC #" + npcId;
+
+                int mapId = getCurrentMapId();
+                int x = getPlayerX();
+                int y = getPlayerY();
+                if (npcObj != null && frFieldAr != null && frFieldAs != null) {
+                    try {
+                        x = frFieldAr.getShort(npcObj);
+                        y = frFieldAs.getShort(npcObj);
+                    } catch (Exception ignore) {}
+                }
+
+                String[] menuItems = readDialogMenuItems();
+                StringBuilder menuSb = new StringBuilder();
+                if (menuItems != null) {
+                    for (String m : menuItems) {
+                        if (menuSb.length() > 0) menuSb.append(" | ");
+                        menuSb.append(m);
+                    }
+                }
+
+                java.io.PrintWriter w = Auto.getWriter();
+                if (w != null) {
+                    w.print("{\"type\":\"npc_clicked_probe\",\"username\":\"" + escapeJson(Auto.getUsername()) + "\""
+                            + ",\"npcId\":" + npcId
+                            + ",\"name\":\"" + escapeJson(npcName) + "\""
+                            + ",\"map\":" + mapId
+                            + ",\"x\":" + x
+                            + ",\"y\":" + y
+                            + ",\"menu\":\"" + escapeJson(menuSb.toString()) + "\""
+                            + ",\"question\":\"" + escapeJson(question) + "\"}\n");
+                    w.flush();
+                }
+            }
+        } catch (Exception ignore) {}
+    }
+
     /** Escape special characters for JSON string. */
     private String escapeJson(String s) {
         if (s == null) return "";
@@ -14089,4 +14127,335 @@ public class TaskManager {
                 .replace("\t", "\\t");
     }
 
+    // ------------------------------------------------------------------
+    // AUTO QUIZ NPC EVENT SYSTEM
+    // ------------------------------------------------------------------
+    private static final int QUIZ_STEP_IDLE = 0;
+    private static final int QUIZ_STEP_MOVE_NPC = 1;
+    private static final int QUIZ_STEP_OPEN_NPC = 2;
+    private static final int QUIZ_STEP_CLICK_START = 3;
+    private static final int QUIZ_STEP_READ_QUESTION = 4;
+    private static final int QUIZ_STEP_WAIT_QUERY_RES = 5;
+    private static final int QUIZ_STEP_AUTO_ANSWER = 6;
+    private static final int QUIZ_STEP_WAIT_HUMAN = 7;
+    private static final int QUIZ_STEP_CHECK_TRANSITION = 8;
+    private static final int QUIZ_STEP_ESC_POPUP = 9;
+    private static final int QUIZ_STEP_COOLDOWN = 10;
+
+    private int quizStep = QUIZ_STEP_IDLE;
+    private long quizNextTime = 0;
+    private int quizNpcId = -1;
+    private String quizLastQuestion = "";
+    private String quizQueryQuestion = "";
+    private String quizQueryResAnswer = null;
+    private boolean quizQueryPending = false;
+    private String quizSelectedAnswer = "";
+    private long quizAnswerTime = 0;
+    private long quizCooldownUntil = 0;
+
+    private java.util.Set<Integer> quizIgnoredNpcIds = new java.util.HashSet<Integer>();
+    private int quizClickStartRetry = 0;
+
+    public String startQuiz(int npcId) {
+        if (!reflectionReady) initReflection();
+        stopCurrentActivity();
+        this.quizNpcId = npcId;
+        this.quizStep = QUIZ_STEP_MOVE_NPC;
+        this.quizNextTime = 0;
+        this.quizLastQuestion = "";
+        this.quizQueryQuestion = "";
+        this.quizQueryResAnswer = null;
+        this.quizQueryPending = false;
+        this.quizSelectedAnswer = "";
+        this.quizIgnoredNpcIds.clear();
+        this.quizClickStartRetry = 0;
+        log("Auto Quiz NPC: bat dau");
+        pushQuizStatus("Bat dau Auto Quiz NPC...");
+        return "da bat dau Auto Quiz NPC";
+    }
+
+    public void stopQuiz() {
+        if (quizStep > 0) {
+            log("Auto Quiz NPC: dung");
+            pushQuizStatus("Da dung Auto Quiz NPC");
+        }
+        this.quizStep = QUIZ_STEP_IDLE;
+    }
+
+    public void onQuizQueryRes(String question, String correctAnswer) {
+        if (quizStep == QUIZ_STEP_WAIT_QUERY_RES) {
+            this.quizQueryResAnswer = correctAnswer;
+            this.quizQueryPending = false;
+        }
+    }
+
+    private void pushQuizQuery(String question) {
+        try {
+            java.io.PrintWriter w = Auto.getWriter();
+            if (w == null) return;
+            w.print("{\"type\":\"quiz_query\",\"username\":\"" + escapeJson(Auto.getUsername()) + "\""
+                    + ",\"question\":\"" + escapeJson(question) + "\"}\n");
+            w.flush();
+        } catch (Exception e) {
+            log("pushQuizQuery error: " + e.getMessage());
+        }
+    }
+
+    private void pushQuizRecordCorrect(String question, String answer) {
+        try {
+            java.io.PrintWriter w = Auto.getWriter();
+            if (w == null) return;
+            w.print("{\"type\":\"quiz_record_correct\",\"username\":\"" + escapeJson(Auto.getUsername()) + "\""
+                    + ",\"question\":\"" + escapeJson(question) + "\""
+                    + ",\"answer\":\"" + escapeJson(answer) + "\"}\n");
+            w.flush();
+        } catch (Exception e) {
+            log("pushQuizRecordCorrect error: " + e.getMessage());
+        }
+    }
+
+    private void pushQuizStatus(String detail) {
+        try {
+            java.io.PrintWriter w = Auto.getWriter();
+            if (w == null) return;
+            w.print("{\"type\":\"quiz_status\",\"username\":\"" + escapeJson(Auto.getUsername()) + "\""
+                    + ",\"detail\":\"" + escapeJson(detail) + "\"}\n");
+            w.flush();
+        } catch (Exception e) {
+            log("pushQuizStatus error: " + e.getMessage());
+        }
+    }
+
+    private void tickQuiz(long now) {
+        if (now < quizNextTime) return;
+
+        switch (quizStep) {
+            case QUIZ_STEP_MOVE_NPC: {
+                int[] dlg = detectDialog();
+                if (dlg != null && dlg[0] >= 0 && !quizIgnoredNpcIds.contains(Integer.valueOf(dlg[0]))) {
+                    this.quizNpcId = dlg[0];
+                    quizStep = QUIZ_STEP_CLICK_START;
+                    quizNextTime = now + 300;
+                    return;
+                }
+                int targetNpc = quizNpcId;
+                int nx = -1, ny = -1;
+                if (targetNpc <= 0 || quizIgnoredNpcIds.contains(Integer.valueOf(targetNpc))) {
+                    int[] npcData = findNpcByName("Tsunade", quizIgnoredNpcIds);
+                    if (npcData == null) npcData = findNpcByName("Câu hỏi", quizIgnoredNpcIds);
+                    if (npcData == null) npcData = findNpcByName("Event", quizIgnoredNpcIds);
+                    if (npcData == null) npcData = findNpcByName("Sự kiện", quizIgnoredNpcIds);
+                    if (npcData == null) npcData = findNpcByName("Npc", quizIgnoredNpcIds);
+                    if (npcData != null) {
+                        targetNpc = npcData[0];
+                        nx = npcData[1];
+                        ny = npcData[2];
+                    }
+                } else {
+                    Object npcObj = findNpcOnMap(targetNpc);
+                    if (npcObj != null && frFieldAr != null && frFieldAs != null) {
+                        try {
+                            nx = frFieldAr.getShort(npcObj);
+                            ny = frFieldAs.getShort(npcObj);
+                        } catch (Exception ignore) {}
+                    }
+                }
+                if (targetNpc > 0) {
+                    this.quizNpcId = targetNpc;
+                    if (nx > 0 && ny > 0) {
+                        try {
+                            int curX = getPlayerX();
+                            int curY = getPlayerY();
+                            double dist = Math.hypot(nx - curX, ny - curY);
+                            if (dist > NPC_INTERACT_RANGE) {
+                                navigateTo(getCurrentMapId(), nx, ny);
+                                quizNextTime = now + 1000;
+                                return;
+                            }
+                        } catch (Exception ignore) {}
+                    }
+                }
+                quizStep = QUIZ_STEP_OPEN_NPC;
+                quizNextTime = now + 400;
+                break;
+            }
+
+            case QUIZ_STEP_OPEN_NPC: {
+                if (quizNpcId > 0) {
+                    try { sendOpenNpc(quizNpcId); } catch (Exception ignore) {}
+                }
+                quizStep = QUIZ_STEP_CLICK_START;
+                quizNextTime = now + 800;
+                break;
+            }
+
+            case QUIZ_STEP_CLICK_START: {
+                String[] menu = readDialogMenuItems();
+                if (menu != null && menu.length > 0) {
+                    int startIdx = findMenuIndexByKeyword(menu, "bắt đầu");
+                    if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "tra loi");
+                    if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "bat dau");
+                    if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "câu hỏi");
+                    if (startIdx >= 0) {
+                        try { sendSelectMenu(quizNpcId, startIdx); } catch (Exception ignore) {}
+                        quizStep = QUIZ_STEP_READ_QUESTION;
+                        quizNextTime = now + 800;
+                        quizClickStartRetry = 0;
+                        return;
+                    }
+                }
+                String qText = readDialogQuestionText();
+                if (qText != null && !qText.trim().isEmpty()) {
+                    quizStep = QUIZ_STEP_READ_QUESTION;
+                    quizNextTime = now + 300;
+                    quizClickStartRetry = 0;
+                    return;
+                }
+
+                quizClickStartRetry++;
+                if (quizClickStartRetry >= 3) {
+                    log("Quiz: Open NPC " + quizNpcId + " doesn't have Quiz menu option! Ignoring this NPC and searching next...");
+                    pushQuizStatus("Mở nhầm NPC Tsunade cũ " + quizNpcId + " (không có nút trả lời). Đang thử NPC Tsunade Sự kiện...");
+                    quizIgnoredNpcIds.add(Integer.valueOf(quizNpcId));
+                    quizNpcId = -1;
+                    quizClickStartRetry = 0;
+                    closeCurrentDialog();
+                    closeAnyDialog();
+                    quizStep = QUIZ_STEP_MOVE_NPC;
+                    quizNextTime = now + 500;
+                    return;
+                }
+                quizNextTime = now + 500;
+                break;
+            }
+
+            case QUIZ_STEP_READ_QUESTION: {
+                String qText = readDialogQuestionText();
+                if (qText == null || qText.trim().isEmpty()) {
+                    quizNextTime = now + 400;
+                    return;
+                }
+
+                if (!quizLastQuestion.isEmpty() && !quizLastQuestion.equalsIgnoreCase(qText) && !quizSelectedAnswer.isEmpty()) {
+                    log("Quiz: Question changed! Recording correct answer: " + quizLastQuestion + " -> " + quizSelectedAnswer);
+                    pushQuizRecordCorrect(quizLastQuestion, quizSelectedAnswer);
+                    quizSelectedAnswer = "";
+                }
+
+                quizQueryQuestion = qText;
+                pushQuizQuery(qText);
+                quizQueryPending = true;
+                quizQueryResAnswer = null;
+                quizAnswerTime = now;
+                quizStep = QUIZ_STEP_WAIT_QUERY_RES;
+                quizNextTime = now + 200;
+                break;
+            }
+
+            case QUIZ_STEP_WAIT_QUERY_RES: {
+                if (quizQueryPending && now < quizAnswerTime + 3000) {
+                    return;
+                }
+
+                String[] options = readDialogMenuItems();
+                if (options == null || options.length == 0) {
+                    quizNextTime = now + 400;
+                    return;
+                }
+
+                // CASE 1: DB Hit
+                if (quizQueryResAnswer != null && !quizQueryResAnswer.trim().isEmpty()) {
+                    int matchIdx = findMenuIndexByKeyword(options, quizQueryResAnswer);
+                    if (matchIdx >= 0) {
+                        log("Quiz: DB Hit! Selecting answer [" + matchIdx + "]: " + options[matchIdx]);
+                        pushQuizStatus("Tự động chọn đáp án từ DB: " + options[matchIdx]);
+                        quizLastQuestion = quizQueryQuestion;
+                        quizSelectedAnswer = options[matchIdx];
+                        quizAnswerTime = now;
+                        try { sendSelectMenu(quizNpcId, matchIdx); } catch (Exception ignore) {}
+                        quizStep = QUIZ_STEP_CHECK_TRANSITION;
+                        quizNextTime = now + 800;
+                        return;
+                    }
+                }
+
+                // CASE 2: DB Miss -> Wait for human input
+                log("Quiz: DB Miss! Waiting for user manual click...");
+                pushQuizStatus("Chờ người dùng chọn đáp án cho: " + quizQueryQuestion);
+                quizLastQuestion = quizQueryQuestion;
+                quizSelectedAnswer = "";
+                quizStep = QUIZ_STEP_WAIT_HUMAN;
+                quizNextTime = now + 400;
+                break;
+            }
+
+            case QUIZ_STEP_WAIT_HUMAN: {
+                String confirmText = readConfirmPopupText();
+                if (confirmText != null && (confirmText.contains("30") || confirmText.toLowerCase().contains("cho") || confirmText.toLowerCase().contains("phat"))) {
+                    log("Quiz: Penalty popup detected: " + confirmText);
+                    quizStep = QUIZ_STEP_ESC_POPUP;
+                    quizNextTime = now + 200;
+                    return;
+                }
+
+                String curQ = readDialogQuestionText();
+                if (curQ != null && !curQ.trim().isEmpty() && !curQ.equalsIgnoreCase(quizLastQuestion)) {
+                    quizStep = QUIZ_STEP_READ_QUESTION;
+                    quizNextTime = now + 200;
+                    return;
+                }
+
+                quizNextTime = now + 400;
+                break;
+            }
+
+            case QUIZ_STEP_CHECK_TRANSITION: {
+                String confirmText = readConfirmPopupText();
+                if (confirmText != null && (confirmText.contains("30") || confirmText.toLowerCase().contains("cho") || confirmText.toLowerCase().contains("phat"))) {
+                    log("Quiz: Wrong answer selected! Penalty popup: " + confirmText);
+                    quizStep = QUIZ_STEP_ESC_POPUP;
+                    quizNextTime = now + 200;
+                    return;
+                }
+
+                String curQ = readDialogQuestionText();
+                if (curQ != null && !curQ.trim().isEmpty() && !curQ.equalsIgnoreCase(quizLastQuestion)) {
+                    quizStep = QUIZ_STEP_READ_QUESTION;
+                    quizNextTime = now + 200;
+                    return;
+                }
+
+                quizNextTime = now + 400;
+                break;
+            }
+
+            case QUIZ_STEP_ESC_POPUP: {
+                log("Quiz: Escaping popup & starting 30s cooldown...");
+                closeConfirmPopup();
+                closeAnyDialog();
+                closeCurrentDialog();
+                quizCooldownUntil = now + 30000;
+                pushQuizStatus("Dính phạt 30s! Đang đếm lùi cooldown...");
+                quizStep = QUIZ_STEP_COOLDOWN;
+                quizNextTime = now + 1000;
+                break;
+            }
+
+            case QUIZ_STEP_COOLDOWN: {
+                if (now >= quizCooldownUntil) {
+                    log("Quiz: 30s Cooldown done! Restarting NPC interaction...");
+                    pushQuizStatus("Hết 30s cooldown! Thao tác lại từ đầu...");
+                    quizStep = QUIZ_STEP_MOVE_NPC;
+                    quizNextTime = now + 500;
+                } else {
+                    long remSec = (quizCooldownUntil - now) / 1000;
+                    if (remSec % 5 == 0) {
+                        pushQuizStatus("Cooldown còn " + remSec + "s...");
+                    }
+                    quizNextTime = now + 1000;
+                }
+                break;
+            }
+        }
+    }
 }

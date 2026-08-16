@@ -163,6 +163,7 @@ namespace Manager
         private Button btnItemList;   // 📦 xuất bảng mẫu vật phẩm ra file, để tra mã thêm vào danh sách gom
         private Button btnGomDo;      // 🎒 gom đồ từ mem về lead
         private Button btnTinhThach;  // 💎 đổi đồ lấy tinh thạch ở NPC Kinkaku
+        private Button btnQuiz;       // 🧠 Auto Quiz NPC
         // Đã bỏ nút "🔍 Soi menu NPC": câu hỏi của nó đã trả lời xong (mục con nằm sẵn trong
         // chuỗi của mục cha, xác nhận 11:20 ngày 29/07) và kết luận đã ghi vào quest_anchors.cfg.
         private Button btnGoExit;
@@ -496,6 +497,7 @@ namespace Manager
             btnItemList  = MkBtn("📦  Danh sách vật phẩm");
             btnGomDo     = MkBtn("🎒  Gom đồ về lead");
             btnTinhThach = MkBtn("💎  Đổi tinh thạch");
+            btnQuiz      = MkBtn("🧠  Auto Quiz NPC");
 
             btnLaunch.Click += BtnLaunch_Click;
             btnStartAuto.Click += BtnStartAuto_Click;
@@ -515,6 +517,7 @@ namespace Manager
             btnItemList.Click += BtnItemList_Click;
             btnGomDo.Click += BtnGomDo_Click;
             btnTinhThach.Click += BtnTinhThach_Click;
+            btnQuiz.Click += BtnQuiz_Click;
 
             // ── NÚT HIỆN TRÊN GIAO DIỆN, theo đúng thứ tự xếp ──────────────────────────────
             //
@@ -527,7 +530,7 @@ namespace Manager
                 btnVillage,  btnKillGame,  btnDiaCung,   btnCamThuat,
                 btnSonCap,
                 btnAgt,      btnHarvest,   btnItemList,  btnGomDo,
-                btnTinhThach
+                btnTinhThach, btnQuiz
             };
             panelControls.Controls.AddRange(_nutHien);
             LayoutControlButtons();
@@ -2530,6 +2533,35 @@ namespace Manager
                     (skipped > 0 ? $" (bỏ qua {skipped} nick chưa có khu)" : ""));
         }
 
+        private void BtnQuiz_Click(object sender, EventArgs e)
+        {
+            var targets = GetCheckedUsernames();
+            if (targets.Count == 0)
+            {
+                MessageBox.Show("Chưa tích chọn nick nào!\nHãy tick ✔ các nick muốn chạy Auto Quiz NPC.");
+                return;
+            }
+
+            int sentCount = 0, notLoggedIn = 0;
+            lock (_sessions)
+            {
+                foreach (var session in _sessions)
+                {
+                    if (string.IsNullOrEmpty(session.Username)) continue;
+                    if (!targets.Any(u => string.Equals(u, session.Username, StringComparison.OrdinalIgnoreCase)))
+                        continue;
+
+                    if (!IsLoggedIn(session.Username)) { notLoggedIn++; continue; }
+
+                    session.SendRawJson("{\"command\":\"quiz_start\"}\n");
+                    sentCount++;
+                }
+            }
+
+            Log($"🧠 Auto Quiz NPC — đã gửi lệnh tới {sentCount} nick" +
+                (notLoggedIn > 0 ? $" (bỏ qua {notLoggedIn} nick chưa vào game)" : ""));
+        }
+
         /// <summary>
         /// Địa cung — bước 1: bảo đảm các nick đang tick là TRƯỞNG của một nhóm.
         /// Hoạt động Địa cung chỉ cần "có nhóm + là trưởng", không cần mời thêm ai.
@@ -3337,7 +3369,7 @@ namespace Manager
         // KHÔNG lập nhóm: hoạt động chạy theo gia tộc, mỗi nick tự bấm menu của mình.
         // Manager chỉ làm đúng một việc điều phối: nghe nick MỞ báo xong rồi phát tín hiệu
         // cho phần còn lại — vì mục "Vào ải gia tộc" chỉ có tác dụng sau khi cửa ải đã mở.
-        private GroupSetup _agtSetup;
+        private readonly List<string> _agtActiveUsers = new List<string>();
         private bool _agtOn = false;
 
         public void SetAgtButton(bool on)
@@ -3353,105 +3385,47 @@ namespace Manager
             if (_agtOn)
             {
                 int stopped = 0;
-                if (_agtSetup != null)
+                var targets = _agtActiveUsers.Count > 0 ? _agtActiveUsers : GetCheckedUsernames();
+                foreach (var u in targets)
                 {
-                    var all = new List<string> { _agtSetup.Leader };
-                    all.AddRange(_agtSetup.Members);
-                    foreach (var u in all)
-                    {
-                        var ss = FindSession(u);
-                        if (ss == null) continue;
-                        ss.SendRawJson("{\"command\":\"agt_stop\"}\n");
-                        stopped++;
-                    }
+                    var ss = FindSession(u);
+                    if (ss == null) continue;
+                    ss.SendRawJson("{\"command\":\"agt_stop\"}\n");
+                    stopped++;
                 }
-                _agtSetup = null;
+                _agtActiveUsers.Clear();
                 AgtFollowStop();          // tắt luôn bám theo, không để tuyến sống sót mồ côi
                 SetAgtButton(false);
                 Log($"🏰🛑 Đã tắt Ải gia tộc — báo {stopped} nick dừng.");
                 return;
             }
 
-            var setups = LoadNhom("agt");
-            if (setups.Count == 0)
+            var checkedTargets = GetCheckedUsernames();
+            if (checkedTargets.Count == 0)
             {
-                MessageBox.Show("doi_hinh.cfg chưa có khối [agt].\n\nMở file:\n" + DoiHinhFilePath +
-                                "\n\n    [agt]\n    mo_cua = <username MỞ CỬA>\n\n" +
-                                "Không có quyền mở cửa ải thì để TRỐNG dòng mo_cua — tool sẽ chỉ đưa " +
-                                "mọi nick đang trong game VÀO một cửa ải đã được mở sẵn.\n\n" +
-                                "KHÔNG cần khai mem: người vào ải lấy theo nick đang trong game.",
-                                "Ải gia tộc");
-                return;
-            }
-            if (setups.Count > 1)
-                Log($"🏰 ⚠️ Có {setups.Count} khối [agt] — chỉ dùng khối đầu '{setups[0].Name}'.");
-
-            // mo_cua để TRỐNG = KHÔNG nick nào đi mở cửa, cả đội chỉ VÀO một cửa ải đã mở sẵn
-            // (người khác trong gia tộc mở bằng tay). Cần vì mở cửa ải là quyền của trưởng/trưởng
-            // lão gia tộc — phần lớn tài khoản chỉ có quyền vào.
-            bool tuMoCua = !string.IsNullOrWhiteSpace(setups[0].Leader);
-
-            // ĐỘI HÌNH = MỌI NICK ĐANG Ở TRONG GAME, trừ nick mở cửa.
-            //
-            // Không lấy theo "team = …" khai trong file nữa. Ải chạy cuối ngày, mà tới lúc đó
-            // đội hình đã qua ba đợt login/tắt — team khai trong file là ảnh chụp của lúc khai,
-            // không phải của lúc chạy. Khai team 3 chẳng hạn: team đó bị tắt client từ giữa
-            // buổi, bấm ải là mất trắng 5 suất mà log chỉ lẳng lặng ghi "bỏ qua, chưa vào game".
-            // "Ai đang trong game" thì Manager biết chắc, khỏi ai phải cập nhật tay.
-            var g = new GroupSetup { Name = "agt", Leader = tuMoCua ? setups[0].Leader : "" };
-            g.Members.AddRange(_config.Accounts
-                .Select(a => a.Username)
-                .Where(u => !string.IsNullOrWhiteSpace(u)
-                            && !string.Equals(u, g.Leader, StringComparison.OrdinalIgnoreCase)
-                            && IsLoggedIn(u)));
-            _agtSetup = g;
-
-            if (g.Members.Count == 0 && !tuMoCua)
-            {
-                Log("🏰 Không có nick nào đang trong game — không có ai để vào ải.");
-                _agtSetup = null;
+                MessageBox.Show("Tích ít nhất một nick trong danh sách để chạy Ải gia tộc.", "Ải gia tộc");
                 return;
             }
 
-            if (tuMoCua)
-            {
-                var leaderSession = FindSession(g.Leader);
-                if (leaderSession == null || !IsLoggedIn(g.Leader))
-                {
-                    Log($"🏰 Bỏ qua — nick mở cửa ải {g.Leader} chưa vào game.");
-                    _agtSetup = null;
-                    return;
-                }
-                // role 1 = nick MỞ cửa ải. Chỉ một nick duy nhất, đúng như luật của hoạt động.
-                leaderSession.SendRawJson("{\"command\":\"agt_start\",\"role\":1}\n");
-            }
-
+            _agtActiveUsers.Clear();
             int n = 0;
-            foreach (var m in g.Members)
+            foreach (var u in checkedTargets)
             {
-                var ss = FindSession(m);
-                if (ss == null) continue;      // lọc IsLoggedIn ở trên rồi, đây chỉ phòng rớt phiên
-                ss.SendRawJson("{\"command\":\"agt_start\",\"role\":2}\n");
+                var ss = FindSession(u);
+                if (ss == null || !IsLoggedIn(u)) continue;
+                ss.SendRawJson("{\"command\":\"agt_start\"}\n");
+                _agtActiveUsers.Add(u);
                 n++;
             }
 
+            if (n == 0)
+            {
+                Log("🏰 Các nick được tích chưa vào game — không thể bắt đầu Ải gia tộc.");
+                return;
+            }
+
             SetAgtButton(true);
-            if (tuMoCua)
-            {
-                Log($"🏰 Ải gia tộc lấy theo nick ĐANG TRONG GAME: {g.Leader} MỞ CỬA + {n} nick chờ vào " +
-                    "→ đang đi tới NPC");
-            }
-            else
-            {
-                // Không ai mở cửa → không có tín hiệu "đã mở" nào để mà chờ. Phát ngay cho cả đội
-                // vào, coi như cửa đã mở sẵn. Cửa CHƯA mở thì từng nick tự báo hỏng ("bam roi
-                // nhung map van la …") — đó là bằng chứng thật, hơn là ngồi chờ một tín hiệu
-                // không bao giờ tới.
-                Log($"🏰 Ải gia tộc — KHÔNG tự mở cửa (mo_cua để trống): {n} nick đang trong game " +
-                    "sẽ vào một cửa ải đã mở sẵn.");
-                foreach (var m in g.Members)
-                    FindSession(m)?.SendRawJson("{\"command\":\"agt_go\"}\n");
-            }
+            Log($"🏰 Ải gia tộc — đã gửi lệnh bắt đầu cho {n} nick được tích → đang tự chạy về làng tìm NPC Onoki.");
         }
 
         // ── BÁM THEO trong ải: dồn hoả lực vào một con thay vì mỗi nick một góc ──
@@ -3518,27 +3492,10 @@ namespace Manager
             _agtFollowMap = -1;
         }
 
-        /// <summary>
-        /// Nick mở cửa ải báo xong → phát tín hiệu cho phần còn lại bấm "Vào ải gia tộc".
-        /// Đây là chỗ DUY NHẤT Manager điều phối trong hoạt động này.
-        /// </summary>
         public void NotifyAgtOpened(string leaderUsername)
         {
             if (InvokeRequired) { BeginInvoke(new Action(() => NotifyAgtOpened(leaderUsername))); return; }
-            if (_agtSetup == null) return;
-            // Chế độ không tự mở cửa (Leader rỗng) thì tín hiệu đã phát ngay lúc bấm nút — bỏ qua.
-            if (string.IsNullOrWhiteSpace(_agtSetup.Leader)) return;
-            if (!string.Equals(_agtSetup.Leader, leaderUsername, StringComparison.OrdinalIgnoreCase)) return;
-
-            int n = 0;
-            foreach (var m in _agtSetup.Members)
-            {
-                var ss = FindSession(m);
-                if (ss == null) continue;
-                ss.SendRawJson("{\"command\":\"agt_go\"}\n");
-                n++;
-            }
-            Log($"🏰📣 Cửa ải đã mở → phát tín hiệu cho {n} nick vào ải");
+            Log($"🏰📣 [{leaderUsername}] đã mở cửa ải gia tộc");
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -5201,6 +5158,41 @@ namespace Manager
                                 bool ok = data.TryGetValue("ok", out var okGe)
                                           && bool.TryParse(okGe.ToString(), out bool bGe) && bGe;
                                 _mainForm.Log($"{(ok ? "🚪" : "🚪❌")} [{user}] {detail}");
+                                continue;
+                            }
+
+                            // ── quiz_*: module Auto Trả lời câu hỏi NPC Sự kiện ──
+                            if (data.TryGetValue("type", out var typeQz) && typeQz.ToString().StartsWith("quiz_"))
+                            {
+                                string qzType = typeQz.ToString();
+                                string user = data.TryGetValue("username", out var uQz) ? uQz.ToString() : Username;
+
+                                if (qzType == "quiz_query")
+                                {
+                                    string qText = data.TryGetValue("question", out var qObj) ? qObj.ToString() : "";
+                                    string ans = QuizManager.Instance.GetCorrectAnswer(qText);
+                                    string safeQ = JsonSerializer.Serialize(qText);
+                                    string safeA = JsonSerializer.Serialize(ans ?? "");
+                                    SendRawJson($"{{\"command\":\"quiz_query_res\",\"question\":{safeQ},\"correctAnswer\":{safeA}}}\n");
+                                    if (!string.IsNullOrEmpty(ans))
+                                        _mainForm.Log($"🧠 [{user}] Quiz DB hit: \"{qText}\" -> \"{ans}\"");
+                                    else
+                                        _mainForm.Log($"🧠 [{user}] Quiz DB miss: \"{qText}\" (chờ người dùng chọn...)");
+                                }
+                                else if (qzType == "quiz_record_correct")
+                                {
+                                    string qText = data.TryGetValue("question", out var qObj) ? qObj.ToString() : "";
+                                    string aText = data.TryGetValue("answer", out var aObj) ? aObj.ToString() : "";
+                                    if (QuizManager.Instance.SaveCorrectAnswer(qText, aText))
+                                    {
+                                        _mainForm.Log($"🧠✨ [{user}] Đã ghi nhớ câu hỏi mới: \"{qText}\" -> \"{aText}\"");
+                                    }
+                                }
+                                else if (qzType == "quiz_status")
+                                {
+                                    string detail = data.TryGetValue("detail", out var dQz) ? dQz.ToString() : "";
+                                    _mainForm.Log($"🧠 [{user}] {detail}");
+                                }
                                 continue;
                             }
 

@@ -248,10 +248,35 @@ tin_loi          = 1
                 var body = new StringContent(JsonSerializer.Serialize(noi), Encoding.UTF8, "application/json");
                 var rep = await _http.PostAsync($"https://api.telegram.org/bot{_cf.Token}/sendMessage", body, ct);
                 if (!rep.IsSuccessStatusCode)
-                    _log($"⚠ Telegram sendMessage {(int)rep.StatusCode}: {await DocGon(rep)}");
+                {
+                    string errBody = await DocGon(rep);
+                    _log($"⚠ Telegram sendMessage {(int)rep.StatusCode}: {errBody}");
+                    // Nếu lỗi do parse HTML (400), thử gửi lại dạng text thường để không bao giờ bị nuốt tin
+                    if ((int)rep.StatusCode == 400)
+                    {
+                        try
+                        {
+                            var fallback = new Dictionary<string, object>
+                            {
+                                ["chat_id"] = _cf.ChatId,
+                                ["text"] = StripHtml(text),
+                                ["disable_web_page_preview"] = true
+                            };
+                            var fbBody = new StringContent(JsonSerializer.Serialize(fallback), Encoding.UTF8, "application/json");
+                            await _http.PostAsync($"https://api.telegram.org/bot{_cf.Token}/sendMessage", fbBody, ct);
+                        }
+                        catch { }
+                    }
+                }
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { _log($"⚠ Telegram sendMessage lỗi: {ex.Message}"); }
+        }
+
+        public static string StripHtml(string input)
+        {
+            if (string.IsNullOrEmpty(input)) return "";
+            return System.Text.RegularExpressions.Regex.Replace(input, "<.*?>", string.Empty);
         }
 
         /// <summary>
@@ -304,22 +329,19 @@ tin_loi          = 1
             return -1;
         }
 
-        // Vòng đọc đang hỏng liên tiếp mấy nhịp. Kêu lần đầu và lúc khỏi, không kêu mỗi 2 giây.
         private int _docLoiDem;
+        public string BotUsername { get; private set; } = "";
 
         /// <summary>
-        /// Vòng ĐỌC tin trả lời từ nhóm. Trước bản này Manager chỉ biết gửi.
+        /// Vòng ĐỌC tin trả lời (giải captcha) và NHẬN LỆNH điều khiển từ nhóm/chat Telegram.
         ///
-        /// Nhịp phải DÀY (2 giây) chứ không thưa như tin gửi đi: mỗi giây trễ ở đây là một giây
-        /// nick nằm chết thêm, mà bùa uế thổ không tự tan — nó nằm tới khi có người nhập đúng mã.
-        /// Poll 30 giây thì mọi thứ khác chạy đúng mà người dùng vẫn thấy nó ì ra.
-        ///
+        /// Nhịp 2 giây: vừa bảo đảm phản hồi lệnh nhanh chóng, vừa kịp thời giải bùa uế thổ.
         /// `offset` phải giữ và luôn tiến: Telegram trả lại y nguyên các bản cập nhật chưa được
         /// xác nhận, không giữ offset là mỗi vòng lại xử lý lại đúng tin cũ.
         /// </summary>
-        public void BatDauDocTraLoi(Action<int, string> khiCoTraLoi)
+        public void BatDauDocTinNhan(Action<int, string> khiCoTraLoiCaptcha, Action<string, Action<string>> khiCoLenh)
         {
-            if (!_cf.Bat || khiCoTraLoi == null) return;
+            if (!_cf.Bat) return;
             _ = Task.Run(async () =>
             {
                 long offset = 0;
@@ -342,47 +364,79 @@ tin_loi          = 1
                                         if (up.TryGetProperty("update_id", out var uid))
                                             offset = uid.GetInt64() + 1;
                                         if (!up.TryGetProperty("message", out var msg)) continue;
-                                        if (!msg.TryGetProperty("text", out var txt)) continue;
-                                        if (!msg.TryGetProperty("reply_to_message", out var rt)) continue;
-                                        if (!rt.TryGetProperty("message_id", out var rid)) continue;
-                                        khiCoTraLoi(rid.GetInt32(), txt.GetString() ?? "");
+
+                                        // Tự động nhận diện chat_id nếu chưa có
+                                        if (msg.TryGetProperty("chat", out var chatElem) && chatElem.TryGetProperty("id", out var idElem))
+                                        {
+                                            string cid = idElem.ValueKind == JsonValueKind.Number
+                                                ? idElem.GetInt64().ToString(CultureInfo.InvariantCulture)
+                                                : idElem.ToString();
+                                            if (string.IsNullOrEmpty(_cf.ChatId) && !string.IsNullOrEmpty(cid))
+                                            {
+                                                _cf.ChatId = cid;
+                                                TelegramCauHinh.GhiChatId(cid);
+                                                _log($"📨 Telegram: đã nhận diện chat_id {cid} và lưu vào telegram.cfg. Bắt đầu nhận lệnh.");
+                                            }
+                                        }
+
+                                        if (!msg.TryGetProperty("text", out var txtElement)) continue;
+                                        string rawText = txtElement.GetString() ?? "";
+                                        if (string.IsNullOrWhiteSpace(rawText)) continue;
+
+                                        // Kiểm tra nếu là reply vào tin ảnh captcha
+                                        if (msg.TryGetProperty("reply_to_message", out var rt)
+                                            && rt.TryGetProperty("message_id", out var rid))
+                                        {
+                                            khiCoTraLoiCaptcha?.Invoke(rid.GetInt32(), rawText.Trim());
+                                            continue;
+                                        }
+
+                                        // Nếu là tin nhắn lệnh (bắt đầu bằng / hoặc văn bản)
+                                        if (khiCoLenh != null)
+                                        {
+                                            string text = rawText.Trim();
+                                            // Xoá @bot_username ở lệnh nếu có (ví dụ /agt@mybot all -> /agt all)
+                                            if (text.StartsWith("/") && !string.IsNullOrEmpty(BotUsername))
+                                            {
+                                                string botTag = "@" + BotUsername;
+                                                int tagIdx = text.IndexOf(botTag, StringComparison.OrdinalIgnoreCase);
+                                                if (tagIdx > 0)
+                                                {
+                                                    text = text.Remove(tagIdx, botTag.Length);
+                                                }
+                                            }
+
+                                            // Gửi phản hồi lại qua hàm Gui
+                                            khiCoLenh(text, repText => Gui(repText));
+                                        }
                                     }
                                 }
                             }
                             if (_docLoiDem > 0)
                             {
-                                _log($"📨 Telegram: đọc trả lời nối lại được (hỏng {_docLoiDem} nhịp).");
+                                _log($"📨 Telegram: đọc tin nhắn nối lại được (hỏng {_docLoiDem} nhịp).");
                                 _docLoiDem = 0;
                             }
                         }
-                        // 409 Conflict = có HAI chỗ cùng gọi getUpdates trên một token (mở hai
-                        // Manager chẳng hạn). Telegram chỉ giao mỗi bản cập nhật cho MỘT bên, nên
-                        // reply sẽ rơi sang bên kia rồi bị nuốt. Phải thấy được mới đoán ra.
                         else if (++_docLoiDem == 1)
                             _log($"⚠ Telegram getUpdates {(int)rep.StatusCode}: {await DocGon(rep)}");
                     }
-                    // CHỈ thoát khi ĐÚNG là bị huỷ.
-                    //
-                    // HttpClient hết hạn 20 giây cũng ném TaskCanceledException, mà nó là CON của
-                    // OperationCanceledException — bắt trơn cả họ rồi `return` thì mạng chớp một
-                    // cái là luồng đọc chết hẳn, lặng lẽ, tới hết phiên.
-                    //
-                    // Đo thật 10/08: khoảng 08:11 mạng hỏng một nhịp. 08:19 gửi ảnh captcha của
-                    // [katarina] vẫn lên bình thường (luồng GỬI có đường thử lại riêng, còn báo
-                    // "nối lại được"), nhưng hai lần reply mã thì không ai nhặt — và không một
-                    // dòng log nào nói vì sao. Cái đắt không phải là hỏng, mà là hỏng KHÔNG KÊU.
                     catch (OperationCanceledException) when (_dung.IsCancellationRequested) { return; }
                     catch (Exception ex)
                     {
-                        // Kêu MỘT lần rồi im: mất mạng 10 phút là 300 nhịp, kêu hết thì lấp log.
                         if (++_docLoiDem == 1)
-                            _log($"⚠ Telegram: đọc trả lời lỗi — {Gon(ex.Message)}"
+                            _log($"⚠ Telegram: đọc tin nhắn lỗi — {Gon(ex.Message)}"
                                + " (tự thử lại mỗi 2 giây, KHÔNG chết luồng)");
                     }
                     try { await Task.Delay(2000, _dung.Token); } catch { return; }
                 }
-                _log("⚠ Telegram: vòng đọc trả lời đã dừng — reply mã captcha sẽ không còn tác dụng.");
+                _log("⚠ Telegram: vòng đọc tin nhắn đã dừng.");
             });
+        }
+
+        public void BatDauDocTraLoi(Action<int, string> khiCoTraLoi)
+        {
+            BatDauDocTinNhan(khiCoTraLoi, null);
         }
 
         /// <summary>
@@ -491,6 +545,7 @@ tin_loi          = 1
                         && r.TryGetProperty("username", out var u))
                         ten = u.GetString() ?? "?";
                 }
+                BotUsername = ten;
                 if (_cf.ChatId.Length > 0)
                 {
                     _log($"📨 Telegram: đã nối bot @{ten}, bắn về chat {_cf.ChatId}.");
