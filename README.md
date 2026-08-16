@@ -30,100 +30,69 @@ bàn giao (đi treo, đóng cửa sổ) ở từng nhánh thì luôn sót một 
 
 ## Cần có trước
 
-| | |
+| Phần mềm | Chi tiết & Cách lấy |
 |---|---|
-| .NET 8 SDK | https://dotnet.microsoft.com/download |
-| Python 3 | để chạy `Injector/inject.py` |
-| Bản cài game Làng Lá | mượn JRE 1.8 và `lib/gdx.jar` của nó |
+| **.NET 8 SDK** | `build_run.bat` **tự động kiểm tra và tải/cài đặt** nếu máy chưa có. Hoặc tải tay tại: https://dotnet.microsoft.com/download |
+| **Python 3** | https://python.org (nhớ tick *"Add Python to PATH"* khi cài) hoặc `winget install Python.Python.3.13 -e` |
+| **Bản cài game Làng Lá** | Mượn JRE 1.8 và `lib/gdx.jar` có sẵn trong thư mục game |
 
-Không cần JDK — script mượn JRE của game cộng với `ecj` (trình biên dịch Java của Eclipse) làm
-`javac`. `ecj` và `javassist` tự tải về lần chạy đầu.
+> **Không cần JDK riêng** — script mượn JRE của game kết hợp `ecj` (Eclipse Compiler for Java) để biên dịch Mod. `ecj` và `javassist` sẽ tự động tải về trong lần build đầu tiên.
 
 ---
 
-## Cài đặt
+## Cài đặt siêu nhanh (3 bước)
 
-> Repo chỉ chứa **mã nguồn** — tải về chưa có `Manager.exe`, bước 3 build ra nó.
+> Repo chứa **mã nguồn** — `build_run.bat` sẽ tự động biên dịch ra `Manager.exe` và patch Mod vào client game.
 
-### 0. Tải mã nguồn
+### 1. Chuẩn bị mã nguồn & `client_modded.jar`
+- Tải mã nguồn về máy (hoặc dùng `git clone https://github.com/skienn81/langlatoolgame.git`).
+- Chép file `client_modded.jar` (xin từ người chia sẻ tool) vào **thư mục gốc dự án** (chỗ chứa file `build_run.bat` và `doi_hinh.cfg`).
 
-```
-git clone https://github.com/skienn81/langlatoolgame.git
-```
+### 2. Trỏ thư mục game & Chạy Build
+- Thiết lập đường dẫn thư mục cài game bằng biến môi trường (hoặc sửa dòng `game_dir` trong `Injector/inject.py`):
+  ```bat
+  set LANGLA_GAME=C:\Games\LangLa
+  ```
+- **Chạy `build_run.bat`** (khuyến nghị chuột phải chọn *"Run as administrator"* để tool tự động cài đặt .NET 8 SDK nếu máy bạn chưa có).
 
-### 1. Lấy `client_modded.jar`
-
-Repo **không kèm file này** — đó là mã của nhà phát hành, không phải mã của dự án. Và **không tự
-bóc ra từ thư mục game được**: bản game hiện tại giữ mã trong `META-INF/client.payload` đã mã hoá,
-nạp qua `com.beatdz.protect.ProtectedLauncher`, nên giải nén file `.exe` chỉ ra lớp vỏ bảo vệ.
-
-**Xin file từ người đưa bạn bộ tool**, chép vào **gốc dự án** (chỗ có `doi_hinh.cfg`).
-Bản game hai bên phải khớp — xem [HUONG_DAN_SETUP.md](HUONG_DAN_SETUP.md) Bước 2.
-
-Đây là giới hạn thật: bộ tool **không tự đứng một mình được**, luôn cần một file truyền tay.
-
-> Từ lần build thứ hai trở đi không phải làm gì: script vừa đọc vừa ghi đè lên chính file đó.
-
-### 2. Trỏ tới thư mục game
-
-Sửa `game_dir` ở đầu `Injector/inject.py`, hoặc đặt biến môi trường:
-
-```
-set LANGLA_GAME=C:\Games\LangLa
-```
-
-### 3. Build
-
-```
-build_run.bat
-```
-
-Hoặc chạy tay:
-
-```
-dotnet build Manager\Manager.csproj -c Release
-python Injector\inject.py
-```
-
-### 4. Khai tài khoản
-
-Mở Manager, gõ tài khoản rồi bấm ➕ — `config.json` tự sinh ra.
-Muốn sửa tay thì chép `config.mau.json` (ở gốc dự án) vào `Manager\bin\Release\net8.0-windows\`,
-đổi tên thành `config.json`.
-
-> `config.json` chứa mật khẩu. Đừng commit, đừng gửi cho ai.
-
-### 5. Khai đội hình
-
-Sửa `doi_hinh.cfg` — thay `nick_01`, `nick_02`… bằng username thật. File có ghi chú đầy đủ
-từng khối. Sửa xong bấm nút là ăn ngay, không cần khởi động lại Manager.
-
-### 6. Kiểm toạ độ
-
-`quest_anchors.cfg` giữ ID map và toạ độ NPC. Số trong file là của một server cụ thể — server
-bạn chơi có thể khác. Đối chiếu lại trước khi chạy thật.
+### 3. Khai báo tài khoản & Chạy ngay
+- Mở `Manager\bin\Release\net8.0-windows\Manager.exe`.
+- Nhập tài khoản, mật khẩu, chọn Server rồi bấm ➕ (file `config.json` sẽ tự động khởi tạo).
+- Tích chọn các nick cần chạy và bấm **🚀 Khởi chạy**.
 
 ---
 
-## Dùng
+## Vận hành game tinh gọn (Daily Workflow)
 
-Build xong (bước 4 trong hướng dẫn) sẽ có `Manager\bin\Release\net8.0-windows\Manager.exe`.
-Mở nó, tích các nick muốn chạy rồi bấm nút.
+Không cần phải thao tác thủ công từng bước phức tạp trong game, bạn có thể vận hành theo các cách tối ưu sau:
 
-### Các nút & Tính năng chính
+### Cách 1: Vận hành 1-Click trên Manager
+Khi mở Manager, các chu trình đã được lập trình thông minh tự chuyển tiếp:
+```
+🚀 Khởi chạy → ▶ Auto NV hằng ngày → 🏯 Địa cung → 💎 Đổi tinh thạch → 🎒 Gom đồ → Tự động treo AFK
+```
+*(Mỗi hoạt động sau khi hoàn tất sẽ tự động đưa nhân vật vào trạng thái AFK an toàn theo cấu hình `quest_anchors.cfg`).*
 
-| Nút / Tính năng | Làm gì |
+### Cách 2: Tự động hóa hoàn toàn với Scheduler & Telegram
+- **Hẹn giờ (Scheduler)**: Cài đặt khung giờ trong ngày để Manager tự đánh thức client, chạy nhiệm vụ, gom đồ và đổi quà mà bạn không cần chạm vào máy tính.
+- **Điều khiển từ xa qua Telegram**: Nhắn tin điều khiển mọi hoạt động (`/nv`, `/dc`, `/gom`, `/ct`, `/agt`, `/status`) và nhận ảnh captcha giải bùa uế thổ tức thì từ điện thoại.
+
+---
+
+## Bảng tính năng điều khiển
+
+| Nút / Tính năng | Chức năng tự động |
 |---|---|
-| 🚀 Khởi chạy | Mở client và login các nick đang tích. Kẹt ở màn đăng nhập thì tự tắt client login lại. |
-| ▶ Auto NV hằng ngày | Chạy nhiệm vụ ngày: nhận, đi tới map, đánh quái, trả nhiệm vụ. |
-| 🏯 Địa cung | Nhận chìa rồi vào hầm. |
-| 💎 Đổi tinh thạch | Đổi trang bị lấy tinh thạch ở NPC. |
-| 🎒 Gom đồ về lead | Mọi nick đang trong game giao đồ cho một nick nhận. Tuần tự từng nick vì game khoá giao dịch 30 giây. |
-| ⚔️ Cấm thuật · 🪢 Sơn cáp | Hoạt động nhóm. Trưởng nhóm đi tìm khu trống, lập nhóm, gọi thành viên. Các nhóm xuất phát ở khu lệch nhau để khỏi giẫm chân. |
-| 🏰 Ải gia tộc | Một nick mở cửa ải, mọi nick đang trong game vào theo, dồn hoả lực vào cùng một mục tiêu. |
-| ❓ Auto Quiz NPC | Tự động trả lời câu hỏi trắc nghiệm / câu hỏi kiểm tra tại NPC. |
-| ⏰ Scheduler / Hẹn giờ | Lập lịch tự động chạy các hoạt động (NV ngày, cấm thuật, gom đồ...) theo khung giờ cố định mỗi ngày. |
-| 🏠 Về làng · 💀 Tắt game | Đưa nhân vật về làng an toàn hoặc đóng nhanh client game. |
+| 🚀 **Khởi chạy** | Tự động mở client và đăng nhập tài khoản. Nếu kẹt mạng/màn hình login sẽ tự khởi động lại client. |
+| ▶ **Auto NV hằng ngày** | Tự nhận nhiệm vụ, tìm đường tới map mục tiêu, đánh quái, tự ăn thức ăn/hồi phục và trả nhiệm vụ. |
+| 🏯 **Địa cung** | Tự động nhận chìa khóa và vào tầng địa cung tương ứng. |
+| 💎 **Đổi tinh thạch** | Tự di chuyển đến NPC và đổi toàn bộ trang bị rác lấy tinh thạch. |
+| 🎒 **Gom đồ về lead** | Các nick phụ tự động xếp hàng giao dịch vật phẩm/trang bị cho nick chính (lead), tự giãn cách 30s chống khóa. |
+| ⚔️ **Cấm thuật · 🪢 Sơn cáp** | Trưởng nhóm tự tìm khu trống, lập nhóm, mời thành viên theo cấu hình `doi_hinh.cfg` và dẫn đội vượt ải. |
+| 🏰 **Ải gia tộc** | Một nick mở cửa ải, toàn bộ dàn nick trong game tự động vào ải và dồn sát thương vào boss/mục tiêu. |
+| ❓ **Auto Quiz NPC** | Tự động đọc và trả lời chính xác câu hỏi trắc nghiệm/kiểm tra khi tương tác với NPC. |
+| ⏰ **Scheduler / Hẹn giờ** | Đặt lịch trình tự động thực thi các tác vụ theo giờ cố định hàng ngày. |
+| 🏠 **Về làng · 💀 Tắt game** | Đưa toàn bộ đội hình về làng an toàn hoặc đóng nhanh toàn bộ client. |
 
 Mỗi nút chạy một việc, **bấm tay từng bước** hoặc **lập lịch / điều khiển từ xa qua Telegram**. Trình tự thường dùng trong ngày:
 

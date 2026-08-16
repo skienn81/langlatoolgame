@@ -9,21 +9,22 @@ README nói dự án này *là gì*. File này chỉ tập trung vào **làm sao
 > Bạn tự build ra nó ở **Bước 4**. Không thấy file chạy sau khi tải về là bình thường,
 > không phải thiếu file.
 
-## Làm nhanh (5 dòng)
+## Làm nhanh (3 bước siêu gọn)
 
 ```bat
 git clone https://github.com/skienn81/langlatoolgame.git
 cd langlatool
-:: chép jar game của bạn vào đây, đặt tên client_modded.jar
-set LANGLA_GAME=C:\Duong\Dan\Game
+:: 1. Chép file jar game của bạn vào đây, đặt tên là client_modded.jar
+:: 2. Đặt đường dẫn game và chạy file build (Chuột phải -> Run as administrator)
+set LANGLA_GAME=C:\Games\LangLa
 build_run.bat
 ```
 
-Xong thì mở `Manager\bin\Release\net8.0-windows\Manager.exe`.
+> **Mẹo:** `build_run.bat` đã tích hợp **tự động kiểm tra và cài đặt .NET 8 SDK** nếu máy bạn chưa có. Bạn chỉ cần bấm `y` khi được hỏi.
 
-Chạy được rồi thì làm tiếp **Bước 6** (map & toạ độ) — không làm thì nhân vật sẽ đứng sai chỗ.
+Xong thì mở `Manager\bin\Release\net8.0-windows\Manager.exe` lên dùng ngay!
 
-Bên dưới là chi tiết từng bước, đánh số 0 → 8. **Bước 6 tốn công nhất** — cứ làm chậm ở đó.
+Chạy lần đầu thì làm thêm **Bước 6** (kiểm tra map & toạ độ NPC) — để nhân vật tương tác chuẩn xác nhất.
 
 ---
 
@@ -34,10 +35,9 @@ git clone https://github.com/skienn81/langlatoolgame.git
 cd langlatool
 ```
 
-Không dùng git thì lên trang repo, bấm nút xanh **Code → Download ZIP** rồi giải nén ra một thư
-mục bất kỳ.
+Không dùng git thì lên trang repo, bấm nút xanh **Code → Download ZIP** rồi giải nén ra một thư mục bất kỳ.
 
-Tải xong thư mục sẽ có đúng chừng này:
+Tải xong thư mục sẽ có cấu trúc:
 
 ```
 Injector\          Manager\            Mod\
@@ -46,46 +46,24 @@ README.md          HUONG_DAN_SETUP.md  SYSTEM_MAP.md       PHAN_TICH_CONG_CU.md
 .gitignore
 ```
 
-**Chưa có `Manager.exe`, chưa có thư mục `bin\`, chưa có `client_modded.jar`.** Ba thứ đó sinh ra
-ở Bước 2 và Bước 4.
-
 ---
 
 ## Bước 1 — Cài phần mềm cần có
 
-### Cách nhanh: winget (có sẵn trên Windows 10/11)
+| Phần mềm | Chi tiết | Cách cài đặt |
+|---|---|---|
+| **.NET 8 SDK** | Cần để build & chạy Manager | `build_run.bat` **tự động tải & cài đặt** (chỉ cần ấn `y`), hoặc tải tại: https://dotnet.microsoft.com/download |
+| **Python 3** | Cần để chạy inject bytecode | https://python.org (nhớ **tick "Add Python to PATH"**) hoặc gõ: `winget install Python.Python.3.13 -e` |
+| **Bản cài game Làng Lá** | Mượn JRE 1.8 và `gdx.jar` | Bản game bạn đang chơi |
 
-Mở **PowerShell** rồi gõ:
+> **Không cần cài JDK.** Script mượn JRE 1.8 nằm sẵn trong thư mục game, cộng với `ecj` (trình biên dịch Java của Eclipse) làm `javac`. `ecj` và `javassist` sẽ tự động tải về từ Maven ở lần build đầu.
 
-```powershell
-winget install --id Microsoft.DotNet.SDK.8 -e
-winget install --id Python.Python.3.13 -e
-winget install --id Git.Git -e
-```
-
-**Đóng cửa sổ terminal rồi mở lại** — cài xong PATH mới có, cửa sổ cũ chưa thấy lệnh mới.
-
-### Cách thủ công
-
-| Cần | Lấy ở đâu |
-|---|---|
-| .NET 8 SDK | https://dotnet.microsoft.com/download |
-| Python 3 | https://python.org — nhớ **tick "Add Python to PATH"** lúc cài |
-| Git (không bắt buộc) | https://git-scm.com — không cài thì tải ZIP |
-| Game Làng Lá | bản bạn đang chơi, mở được bằng tay |
-
-### Kiểm tra đã cài đủ chưa
+### Kiểm tra nhanh (PowerShell / CMD)
 
 ```powershell
-dotnet --version    # phải ra 8.x trở lên
-python --version    # phải ra 3.x
-git --version       # nếu có cài
+dotnet --version    # kiểm tra .NET SDK
+python --version    # kiểm tra Python (phải ra 3.x)
 ```
-
-Lệnh nào báo `is not recognized` nghĩa là **chưa cài** hoặc **cài rồi mà chưa mở lại terminal**.
-
-> **Không cần cài JDK.** Script mượn JRE 1.8 nằm sẵn trong thư mục game, cộng với `ecj` (trình
-> biên dịch Java của Eclipse) làm `javac`. `ecj` và `javassist` tự tải về từ Maven ở lần build đầu.
 
 ---
 
@@ -176,34 +154,42 @@ dir "%LANGLA_GAME%\lib\gdx.jar"
 
 ---
 
-## Bước 4 — Build
+## Bước 4 — Build dự án
 
-Bấm đúp `build_run.bat`. Hoặc gõ tay:
+Cách nhanh nhất: **Chuột phải vào `build_run.bat` → chọn "Run as administrator"**.
+
+File này sẽ tự động:
+1. Kiểm tra `.NET 8 SDK` trên máy: Nếu thiếu, hỏi xác nhận `(y/n)` và tự động tải/cài đặt hoàn chỉnh từ Microsoft.
+2. Biên dịch mã nguồn **Manager C#** sang file chạy `Manager.exe`.
+3. Biên dịch mã nguồn **Mod Java** và patch (vá) tự động vào file `client_modded.jar`.
+
+*(Hoặc nếu muốn chạy thủ công bằng lệnh):*
 
 ```bat
 dotnet build Manager\Manager.csproj -c Release
 python Injector\inject.py
 ```
 
-Chạy đúng thì thấy:
+Khi build thành công, màn hình sẽ hiển thị:
 
 ```
-0 Error(s)
-Modded client jar created at: ...\client_modded.jar
-Verification: Patched game client is fully ready!
+Build Manager xong.
+Inject xong.
+------------------------------------------
+XONG. Mo Manager: ...\Manager.exe
 ```
 
 ### Sau khi build có gì, nằm ở đâu
 
 | File | Từ đâu ra | Ghi chú |
 |---|---|---|
-| `Manager\bin\Release\net8.0-windows\Manager.exe` | `dotnet build` | file để chạy |
-| `client_modded.jar` (bị ghi đè) | `inject.py` | jar game đã vá — đây là file client sẽ mở |
-| `lib\javassist.jar` | tự tải từ Maven | không phải kiếm ở đâu |
-| `tools\ecj.jar` | tự tải từ Maven | |
+| `Manager\bin\Release\net8.0-windows\Manager.exe` | `dotnet build` | file bảng điều khiển để mở chạy |
+| `client_modded.jar` (bị ghi đè) | `inject.py` | jar game đã vá mod — client game sẽ nạp file này |
+| `lib\javassist.jar` | tự tải từ Maven | thư viện sửa bytecode |
+| `tools\ecj.jar` | tự tải từ Maven | trình biên dịch Java của Eclipse |
 | `Mod\classes\` | ecj biên dịch | class trung gian |
 
-Ba file cuối bị `.gitignore` bỏ qua, nên `git clone` sẽ không có — build lần đầu tự sinh.
+Ba file cuối bị `.gitignore` bỏ qua, nên `git clone` sẽ không có — build lần đầu tự động tải về.
 
 ### Lỗi thường gặp khi build
 
@@ -211,9 +197,9 @@ Ba file cuối bị `.gitignore` bỏ qua, nên `git clone` sẽ không có — 
 |---|---|---|
 | `Could not copy ... Manager.exe ... being used` (`MSB3027`) | Manager đang mở | Đóng Manager rồi build lại |
 | `Khong thay thu muc game` | `LANGLA_GAME` / `game_dir` sai | Xem lại Bước 3 |
-| `THIEU client_modded.jar` | chưa làm Bước 2 | |
-| `'dotnet' is not recognized` | chưa cài .NET 8 SDK | Bước 1 |
-| `'python' is not recognized` | chưa cài Python, hoặc quên tick "Add to PATH" | Bước 1 |
+| `THIEU client_modded.jar` | chưa làm Bước 2 | Chép file `client_modded.jar` vào thư mục gốc |
+| `Chua cai dat .NET 8 SDK` | Chưa có SDK trên máy | Ấn `y` trong `build_run.bat` để tool tự tải và cài đặt tự động |
+| `'python' is not recognized` | Chưa cài Python, hoặc quên tick "Add to PATH" | Cài lại Python 3 và tick chọn "Add to PATH" |
 | `Failed to compile mod Java files` | jar game không khớp bản đang cài | Lấy lại jar ở Bước 2 từ đúng bản game |
 
 > **Muốn build thử mà không phải đóng Manager** (chỉ để xem code có lỗi biên dịch không):
@@ -440,26 +426,35 @@ Bên cạnh việc nhận bảng trạng thái và gỡ bùa, bạn có thể g�
 
 ---
 
-## Chạy thử lần đầu
+## Chạy thử & Quy trình vận hành tinh gọn
 
-Chạy từng bước một, xem log sau mỗi bước, đừng bấm liền tay:
+### 1. Kiểm tra lần đầu (Kiểm tra từng bước)
+Chạy thử với 1 nick trước để đảm bảo cấu hình toạ độ và kết nối hoàn toàn chính xác:
 
 ```
 1. Tích 1 nick  →  🚀 Khởi chạy
    Log phải hiện:  🔓 <nick> đã vào game: <tên nhân vật> Lv.xx (HP tối đa xxxxx)
    Chỉ khi thấy ĐỦ tên nhân vật + máu + level mới là vào được thật.
 
-2. ▶ Auto NV hằng ngày      → xem nhân vật có đi nhận và đánh quái không
-3. 🏯 Địa cung          → xem có nhận chìa và vào hầm không
-4. 💎 Đổi tinh thạch
-5. 🎒 Gom đồ            → chạy với 2 nick trước, đừng chạy cả chục nick ngay
+2. ▶ Auto NV hằng ngày  → kiểm tra nhân vật tự tìm đường, đánh quái và trả nhiệm vụ
+3. 🏯 Địa cung          → kiểm tra nhận chìa và vào hầm địa cung
+4. 💎 Đổi tinh thạch    → kiểm tra đổi trang bị tại NPC
+5. 🎒 Gom đồ            → thử nghiệm giao dịch đồ giữa 2 nick
 ```
 
-Chạy được từng nút rồi mới tăng số nick.
+### 2. Vận hành tự động hằng ngày (Daily Auto Flow)
+Để tinh giảm tối đa thao tác thủ công, bạn có 2 cách vận hành:
 
-**Trần số client:** `max_client` trong `doi_hinh.cfg`. Máy chủ thường chặn số client trên một IP —
-lấy số nhỏ hơn giữa "máy chịu nổi" và "server cho phép". Nút 🚀 Khởi chạy đếm số client đang mở và
-chặn nếu vượt.
+- **Cách 1: Chuỗi nút bấm tự động trên Manager**
+  Tích toàn bộ các nick cần chạy, sau đó bấm lần lượt theo chuỗi:
+  `🚀 Khởi chạy` $\rightarrow$ `▶ Auto NV hằng ngày` $\rightarrow$ `🏯 Địa cung` $\rightarrow$ `💎 Đổi tinh thạch` $\rightarrow$ `🎒 Gom đồ`.
+  *(Sau khi hoàn thành mỗi nhiệm vụ, mod sẽ tự động đưa nhân vật về bãi train AFK an toàn theo `quest_anchors.cfg`).*
+
+- **Cách 2: Tự động hóa 100% qua Scheduler / Telegram**
+  - Dùng **Scheduler** hẹn giờ tự chạy lúc sáng sớm (vd: 06:00 chạy NV ngày, 07:00 chạy địa cung).
+  - Hoặc nhắn tin qua **Telegram** từ điện thoại: gõ `/nv`, `/dc`, `/gom`, `/status` mà không cần mở màn hình máy tính.
+
+**Trần số client:** `max_client` trong `doi_hinh.cfg`. Máy chủ thường chặn số client trên một IP — lấy số nhỏ hơn giữa "máy chịu nổi" và "server cho phép". Nút 🚀 Khởi chạy đếm số client đang mở và chặn nếu vượt.
 
 ---
 
@@ -469,8 +464,8 @@ Nhầm chỗ này là ngồi thắc mắc "sửa rồi mà sao không đổi gì
 
 | Sửa cái gì | Phải làm | Có phải tắt client không |
 |---|---|---|
-| `Manager\*.cs` | đóng Manager → `dotnet build Manager\Manager.csproj -c Release` | không |
-| `Mod\src\...\*.java` | `python Injector\inject.py` | **có** — đóng hẳn client rồi mở lại |
+| `Manager\*.cs` | đóng Manager → chạy lại `build_run.bat` | không |
+| `Mod\src\...\*.java` | chạy lại `build_run.bat` (hoặc `python Injector\inject.py`) | **có** — đóng hẳn client rồi mở lại |
 | `quest_anchors.cfg` | không phải build | **có** — mod đọc file này một lần lúc khởi động |
 | `doi_hinh.cfg` | không phải build | không — Manager đọc lại mỗi lần bấm nút |
 | `telegram.cfg` | không phải build | không, nhưng **phải mở lại Manager** |
@@ -485,7 +480,7 @@ Nhầm chỗ này là ngồi thắc mắc "sửa rồi mà sao không đổi gì
 |---|---|
 | Login báo thành công mà lưới vẫn Lv.1 | client kẹt ở màn đăng nhập. Manager tự tắt và login lại `login_thu_lai` lần |
 | Vào nhầm server | xem console client có dòng `SERVER: da chon "<tên>" <ip>:<port>` không |
-| Manager báo `❌ Không tìm thấy client_modded.jar` | Xem danh sách thư mục nó vừa in ra ngay dưới dòng đó — chép file vào **gốc dự án** (cùng chỗ `doi_hinh.cfg`). Bản Manager cũ hơn 10/08 có lỗi dò hụt một cấp nên không thấy file ở gốc: `git pull` rồi build lại, hoặc tạm chép thêm một bản vào cạnh `Manager.exe` |
+| Manager báo `❌ Không tìm thấy client_modded.jar` | Chép file vào **thư mục gốc** (cùng chỗ chứa `doi_hinh.cfg` và `build_run.bat`) |
 | Nhân vật đứng yên không làm gì | sai toạ độ trong `quest_anchors.cfg` — quay lại Bước 6 |
 | Nhóm cấm thuật ngồi chờ mãi | thiếu người: có nick trong nhóm chưa vào game |
 | Gom đồ bỏ qua hết mọi nick | `gom_item_ids` chưa khai mã món nào có trong túi |
@@ -503,42 +498,27 @@ Nhầm chỗ này là ngồi thắc mắc "sửa rồi mà sao không đổi gì
 | `🧿⚠️ … GỬI HỎNG … đường truyền đứt` | socket tới client đứt | reply lại, hoặc vào game gõ tay |
 | **không có dòng nào cả** | reply không tới được Manager | kiểm tra: có reply đúng **tin ảnh** không (không phải nhắn rời)? bot còn trong nhóm không? |
 
-Client mở bằng `java.exe` (bỏ tick "Ẩn console") sẽ hiện cửa sổ console in log của mod — chi tiết
-hơn ô log của Manager nhiều, dùng khi cần truy sâu.
+Client mở bằng `java.exe` (bỏ tick "Ẩn console") sẽ hiện cửa sổ console in log của mod — chi tiết hơn ô log của Manager nhiều, dùng khi cần truy sâu.
 
 ---
 
 ## Tra nhanh — mọi lệnh gom một chỗ
 
 ```bat
-:: ── cài (PowerShell, chạy một lần) ─────────────────────────────
-winget install --id Microsoft.DotNet.SDK.8 -e
+:: ── 1. Cài Python (chỉ chạy 1 lần nếu máy chưa có) ────────────
 winget install --id Python.Python.3.13 -e
-winget install --id Git.Git -e
 
-:: ── kiểm tra ───────────────────────────────────────────────────
-dotnet --version
-python --version
-
-:: ── lấy mã nguồn ───────────────────────────────────────────────
+:: ── 2. Lấy mã nguồn ───────────────────────────────────────────
 git clone https://github.com/skienn81/langlatoolgame.git
 cd langlatool
 
-:: ── trỏ tới game ───────────────────────────────────────────────
+:: ── 3. Trỏ tới game ───────────────────────────────────────────
 set LANGLA_GAME=D:\Duong\Dan\Game
-dir "%LANGLA_GAME%\jre\bin\java.exe"
-dir "%LANGLA_GAME%\lib\gdx.jar"
 
-:: ── build cả hai phần ──────────────────────────────────────────
+:: ── 4. Build tự động (tự cài .NET 8 SDK nếu thiếu) ─────────────
 build_run.bat
-::   hoặc tách ra:
-dotnet build Manager\Manager.csproj -c Release
-python Injector\inject.py
 
-:: ── build thử mà không đụng Manager đang chạy ───────────────────
-dotnet build Manager\Manager.csproj -c Release -p:OutDir=%TEMP%\ktbuild\
-
-:: ── chạy ───────────────────────────────────────────────────────
+:: ── 5. Chạy Manager ───────────────────────────────────────────
 Manager\bin\Release\net8.0-windows\Manager.exe
 ```
 
