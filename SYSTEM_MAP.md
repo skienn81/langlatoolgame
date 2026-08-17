@@ -237,6 +237,9 @@ C# gửi qua `SendRawJson("{\"command\":\"CMD_NAME\", ...}\n")` $\rightarrow$ Ja
 | **Ải Gia Tộc** | `agt_start` | `{"command":"agt_start","role":1}` | `TaskManager.getInstance().startAgt(role)` |
 | **Tool Scan** | `map_scan` / `scan_npc` | `{"command":"map_scan"}` | `TaskManager.getInstance().startMapScan()` |
 | **Captcha Bùa**| `bua_ma` | `{"command":"bua_ma","code":"123456"}` | `Auto.submitBuaMaCode(code)` |
+| **Giftcode**   | `giftcode` | `{"command":"giftcode","code":"TRIAN2026"}` | `TaskManager.getInstance().addGiftCode(code)` |
+| | `giftcode_batch` | `{"command":"giftcode_batch","codes":"CODE1,CODE2"}` | `TaskManager.getInstance().addGiftCodesString(codes)` |
+| | `giftcode_stop` | `{"command":"giftcode_stop"}` | `TaskManager.getInstance().stopGiftCode()` |
 
 ---
 
@@ -258,6 +261,7 @@ Java đẩy qua `writer.print(json + "\n")` $\rightarrow$ C# bắt tại `Client
 | | `son_cap_end` | `username`, `ok`, `detail` | Chốt lượt Sơn Cáp |
 | **Auto NV** | `auto_nv_end` | `username`, `ok`, `detail` | Cập nhật hoàn thành NV Ngày |
 | **Captcha Bùa**| `bua_ue_tho` | `username`, `imgBase64` | Hiện popup giải captcha bùa chú lên Manager |
+| **Giftcode** | `giftcode_result` | `username`, `code`, `success`, `msg` | Báo kết quả phản hồi quà tặng về `GiftCodeForm` |
 
 ---
 

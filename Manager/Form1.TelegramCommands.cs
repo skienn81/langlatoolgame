@@ -107,7 +107,7 @@ namespace Manager
                     {
                         return TeleDungCamThuat();
                     }
-                    return TeleChayCamThuat();
+                    return TeleChayCamThuat(args);
 
                 // ── Sơn Cáp ──
                 case "soncap":
@@ -118,7 +118,7 @@ namespace Manager
                     {
                         return TeleDungSonCap();
                     }
-                    return TeleChaySonCap();
+                    return TeleChaySonCap(args);
 
                 // ── Gom Đồ ──
                 case "gom":
@@ -197,6 +197,15 @@ namespace Manager
                 // ── Hướng Dẫn ──
                 case "help":
                 case "start":
+                case "giftcode":
+                case "code":
+                case "gift":
+                    if (args.Count == 0)
+                    {
+                        return "ℹ️ <b>Cách dùng:</b> <code>/giftcode &lt;mã_1&gt; [mã_2]...</code>\nVí dụ: <code>/giftcode TRIAN2026 TANTHU2026</code>";
+                    }
+                    return TeleNhapGiftCode(args);
+
                 case "huongdan":
                     return TeleHuongDan();
 
@@ -236,10 +245,36 @@ namespace Manager
                 return targets;
             }
 
+            var teams = LoadTeams();
+
             foreach (var arg in args)
             {
                 if (string.IsNullOrWhiteSpace(arg)) continue;
                 string cleanArg = arg.Trim();
+
+                // Kiểm tra xem tham số có phải tên team không (vd: team1, 1, team:1, @team1)
+                string teamKey = cleanArg;
+                if (teamKey.StartsWith("@")) teamKey = teamKey.Substring(1).Trim();
+                if (teamKey.StartsWith("team:", StringComparison.OrdinalIgnoreCase))
+                    teamKey = teamKey.Substring(5).Trim();
+
+                var matchedTeam = teams.FirstOrDefault(kv => string.Equals(kv.Key, cleanArg, StringComparison.OrdinalIgnoreCase)
+                                                          || string.Equals(kv.Key, teamKey, StringComparison.OrdinalIgnoreCase)
+                                                          || string.Equals(kv.Key, "team:" + teamKey, StringComparison.OrdinalIgnoreCase));
+
+                if (!string.IsNullOrEmpty(matchedTeam.Key) && matchedTeam.Value != null && matchedTeam.Value.Count > 0)
+                {
+                    foreach (var tn in matchedTeam.Value)
+                    {
+                        string ru = TimUsername(tn);
+                        if (!string.IsNullOrEmpty(ru) && !targets.Any(x => x.Equals(ru, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            targets.Add(ru);
+                        }
+                    }
+                    continue;
+                }
+
                 string resolvedUser = TimUsername(cleanArg);
                 if (!string.IsNullOrEmpty(resolvedUser)
                     && !targets.Any(x => x.Equals(resolvedUser, StringComparison.OrdinalIgnoreCase)))
@@ -418,13 +453,32 @@ namespace Manager
                  + (skipped > 0 ? $"\n<i>(Có {skipped} nick hôm nay đã nhận chìa nên vào thẳng hầm)</i>" : "");
         }
 
-        private string TeleChayCamThuat()
+        private string TeleChayCamThuat(List<string> args = null)
         {
             if (_sonCapOn) SetSonCapButton(false);
             var setups = LoadNhom("camthuat");
             if (setups.Count == 0)
             {
-                return "⚔️⚠️ <b>Cấm thuật:</b> Chưa khai nhóm trong <code>doi_hinh.cfg</code>.";
+                return "⚔️⚠️ <b>Cấm thuật:</b> Chưa khai nhóm trong <code>doi_hinh.cfg</code>.\n"
+                     + "Dùng <code>/team team1 truong mem1 mem2...</code> để tạo đội hình.";
+            }
+
+            // Lọc theo team nếu người dùng chỉ định (vd: /ct team1 hoặc /ct 1)
+            if (args != null && args.Count > 0 && !args.Any(a => a.Equals("all", StringComparison.OrdinalIgnoreCase) || a.Equals("*")))
+            {
+                var filtered = new List<GroupSetup>();
+                foreach (var arg in args)
+                {
+                    string t = arg.Trim();
+                    if (t.StartsWith("team:", StringComparison.OrdinalIgnoreCase)) t = t.Substring(5).Trim();
+                    var match = setups.FirstOrDefault(s => string.Equals(s.Name, t, StringComparison.OrdinalIgnoreCase)
+                                                        || string.Equals(s.Name, "team:" + t, StringComparison.OrdinalIgnoreCase));
+                    if (match != null && !filtered.Contains(match)) filtered.Add(match);
+                }
+                if (filtered.Count > 0)
+                {
+                    setups = filtered;
+                }
             }
 
             // Gỡ tuyến cũ
@@ -524,14 +578,33 @@ namespace Manager
             return $"⚔️🛑 <b>Cấm thuật:</b> Đã gửi lệnh dừng tới các nhóm ({stopped} nick).";
         }
 
-        private string TeleChaySonCap()
+        private string TeleChaySonCap(List<string> args = null)
         {
             if (_sonCapOn) { StopSonCapAll(); return "🪢🛑 <b>Sơn cáp:</b> Đã dừng."; }
 
             var setups = LoadNhom("soncap");
             if (setups.Count == 0)
             {
-                return "🪢⚠️ <b>Sơn cáp:</b> Chưa khai nhóm trong <code>doi_hinh.cfg</code>.";
+                return "🪢⚠️ <b>Sơn cáp:</b> Chưa khai nhóm trong <code>doi_hinh.cfg</code>.\n"
+                     + "Dùng <code>/team team1 truong mem1 mem2...</code> để tạo đội hình.";
+            }
+
+            // Lọc theo team nếu người dùng chỉ định (vd: /sc team1 hoặc /sc 1)
+            if (args != null && args.Count > 0 && !args.Any(a => a.Equals("all", StringComparison.OrdinalIgnoreCase) || a.Equals("*")))
+            {
+                var filtered = new List<GroupSetup>();
+                foreach (var arg in args)
+                {
+                    string t = arg.Trim();
+                    if (t.StartsWith("team:", StringComparison.OrdinalIgnoreCase)) t = t.Substring(5).Trim();
+                    var match = setups.FirstOrDefault(s => string.Equals(s.Name, t, StringComparison.OrdinalIgnoreCase)
+                                                        || string.Equals(s.Name, "team:" + t, StringComparison.OrdinalIgnoreCase));
+                    if (match != null && !filtered.Contains(match)) filtered.Add(match);
+                }
+                if (filtered.Count > 0)
+                {
+                    setups = filtered;
+                }
             }
 
             foreach (var name in _scInFloor.Keys.ToList())
@@ -704,6 +777,30 @@ namespace Manager
             Log($"🧠 Telegram: Gửi lệnh Auto Quiz NPC tới {sent} nick.");
             return $"🧠 <b>Auto Quiz NPC:</b> Đã gửi lệnh tới <b>{sent}</b> nick:\n"
                  + $"👉 {TelegramBot.Esc(string.Join(", ", names))}";
+        }
+
+        private string TeleNhapGiftCode(List<string> codes)
+        {
+            var targets = GetOnlineUsernames();
+            if (targets.Count == 0) targets = GetCheckedUsernames();
+            if (targets.Count == 0)
+            {
+                return "🎁⚠️ <b>Nhập Giftcode:</b> Chưa có nick nào online hoặc được tick chọn trên Manager.";
+            }
+
+            int sent = 0;
+            foreach (var code in codes)
+            {
+                foreach (var u in targets)
+                {
+                    if (SendGiftCodeToUser(u, code)) sent++;
+                }
+            }
+
+            Log($"🎁 Telegram: Đã gửi {codes.Count} mã Giftcode tới {targets.Count} nick.");
+            return $"🎁 <b>Nhập Giftcode:</b> Đã gửi {codes.Count} mã tới <b>{targets.Count}</b> nick ({sent} lượt gửi):\n"
+                 + $"👉 Mã: {string.Join(", ", codes.Select(c => $"<code>{TelegramBot.Esc(c)}</code>"))}\n"
+                 + "<i>(Kết quả chi tiết được tự động cập nhật trên Manager)</i>";
         }
 
         private string TeleChayVeLang(List<string> targets)
@@ -943,32 +1040,74 @@ namespace Manager
 
         private string TeleXuLyTeam(List<string> args)
         {
-            // /team hoặc /team list -> xem danh sách
+            // 1. /team hoặc /team list hoặc /team ds -> xem danh sách tất cả team
             if (args.Count == 0 || args[0].Equals("list", StringComparison.OrdinalIgnoreCase)
                                 || args[0].Equals("ds", StringComparison.OrdinalIgnoreCase))
             {
                 return TeleXemDanhSachTeam();
             }
 
-            // Cú pháp: /team <tên_team> <đội_trưởng> <nick2> <nick3> ... (tối đa 6 nick)
+            // 2. /team del <ten_team> hoặc /team xoa <ten_team>
+            if (args.Count == 2 && (args[0].Equals("del", StringComparison.OrdinalIgnoreCase)
+                                 || args[0].Equals("xoa", StringComparison.OrdinalIgnoreCase)
+                                 || args[0].Equals("remove", StringComparison.OrdinalIgnoreCase)))
+            {
+                return TeleXoaTeam(args[1].Trim());
+            }
+
             string tenTeam = args[0].Trim();
             if (tenTeam.StartsWith("team:", StringComparison.OrdinalIgnoreCase))
                 tenTeam = tenTeam.Substring(5).Trim();
 
-            if (args.Count < 2)
+            // 3. /team <ten_team> (chỉ có 1 tham số) -> xem chi tiết đội hình
+            if (args.Count == 1)
             {
-                return "👥⚠️ <b>Cú pháp thiếu tham số:</b>\n"
-                     + "<code>/team [tên_team] [đội_trưởng] [nick2] [nick3] ...</code> (tối đa 6 nick)\n"
-                     + "<i>Ví dụ: <code>/team team1 user01 user02 user03 user04 user05 user06</code></i>";
+                return TeleXemChiTietTeam(tenTeam);
             }
 
+            string subCmd = args[1].Trim().ToLowerInvariant();
+
+            // 4. Thêm nick: /team <ten_team> add <nick1> <nick2> ...
+            if (subCmd == "add" || subCmd == "them" || subCmd == "+")
+            {
+                if (args.Count < 3)
+                {
+                    return "👥⚠️ <b>Cú pháp thêm nick vào đội hình:</b>\n"
+                         + $"<code>/team {TelegramBot.Esc(tenTeam)} add &lt;nick1&gt; [nick2]...</code>\n"
+                         + $"<i>Ví dụ: <code>/team {TelegramBot.Esc(tenTeam)} add user05 user06</code></i>";
+                }
+                return TeleThemNickVaoTeam(tenTeam, args.Skip(2).ToList());
+            }
+
+            // 5. Xoá nick / xoá team: /team <ten_team> del [nick1 nick2 ...]
+            if (subCmd == "del" || subCmd == "xoa" || subCmd == "remove" || subCmd == "-")
+            {
+                if (args.Count == 2)
+                {
+                    // Không nhập nick phía sau -> Xoá toàn bộ team này
+                    return TeleXoaTeam(tenTeam);
+                }
+                return TeleXoaNickKhoiTeam(tenTeam, args.Skip(2).ToList());
+            }
+
+            // 6. Đổi trưởng nhóm: /team <ten_team> lead <nick>
+            if (subCmd == "lead" || subCmd == "truong" || subCmd == "leader")
+            {
+                if (args.Count < 3)
+                {
+                    return "👥⚠️ <b>Cú pháp đổi trưởng nhóm:</b>\n"
+                         + $"<code>/team {TelegramBot.Esc(tenTeam)} lead &lt;tên_nick&gt;</code>";
+                }
+                return TeleDoiTruongTeam(tenTeam, args[2]);
+            }
+
+            // 7. Khởi tạo / ghi đè toàn bộ đội hình: /team <ten_team> <đội_trưởng> <nick2> <nick3> ...
             var rawNicks = args.Skip(1).ToList();
             if (rawNicks.Count > 6)
             {
                 return $"👥⚠️ Một đội hình tối đa <b>6 nick</b> (1 trưởng + 5 thành viên). Bạn vừa nhập {rawNicks.Count} nick.";
             }
 
-            // Phân giải tên nick (username / tên nv)
             string leader = TimUsername(rawNicks[0]);
             var members = new List<string>();
             for (int i = 1; i < rawNicks.Count; i++)
@@ -990,11 +1129,11 @@ namespace Manager
             if (teams.Count == 0)
             {
                 return "👥 <b>Danh sách đội hình:</b> Chưa có nhóm nào trong <code>doi_hinh.cfg</code>.\n"
-                     + "Dùng <code>/team [tên] [đội_trưởng] [nick2]...</code> để tạo nhóm mới.";
+                     + "Dùng <code>/team [tên] add [nick1] [nick2]...</code> để tạo nhóm mới.";
             }
 
             var sb = new StringBuilder();
-            sb.Append("👥 <b>Danh sách đội hình hiện tại (doi_hinh.cfg):</b>\n");
+            sb.Append("👥 <b>Danh sách đội hình dùng chung (doi_hinh.cfg):</b>\n");
             foreach (var kv in teams)
             {
                 var nicks = kv.Value;
@@ -1009,7 +1148,295 @@ namespace Manager
                     sb.Append($"\n  ⚔️ Thành viên: {TelegramBot.Esc(string.Join(", ", mems))}");
                 }
             }
+            sb.Append("\n\n<i>👉 Đội hình dùng chung cho Cấm thuật (<code>/ct</code>), Sơn cáp (<code>/sc</code>), <code>/nv [team]</code>, <code>/dc [team]</code>,...</i>\n"
+                    + "<i>👉 Chi tiết: <code>/team [tên_team]</code> | Thêm nick: <code>/team [tên_team] add [nick]</code></i>");
             return sb.ToString();
+        }
+
+        private string TeleXemChiTietTeam(string tenTeam)
+        {
+            var teams = LoadTeams();
+            string key = teams.Keys.FirstOrDefault(k => string.Equals(k, tenTeam, StringComparison.OrdinalIgnoreCase));
+            if (key == null)
+            {
+                return $"👥⚠️ Không tìm thấy đội hình <b>[team:{TelegramBot.Esc(tenTeam)}]</b> trong <code>doi_hinh.cfg</code>.\n"
+                     + $"Dùng <code>/team {TelegramBot.Esc(tenTeam)} add &lt;nick1&gt;...</code> để tạo mới.";
+            }
+
+            var nicks = teams[key];
+            if (nicks.Count == 0)
+            {
+                return $"👥 Đội hình <b>[team:{TelegramBot.Esc(key)}]</b> hiện đang trống.";
+            }
+
+            string lead = nicks[0];
+            var mems = nicks.Skip(1).ToList();
+
+            var sb = new StringBuilder();
+            sb.Append($"👥 <b>Chi tiết đội hình [team:{TelegramBot.Esc(key)}] ({nicks.Count} nick):</b>\n");
+
+            bool leadOnline = IsLoggedIn(lead);
+            string leadChar = GetCharName(lead);
+            string leadInfo = leadOnline ? $"🟢 Online (NV: {TelegramBot.Esc(leadChar)})" : "🔴 Offline";
+            sb.Append($"\n👑 <b>Đội trưởng:</b> <b>{TelegramBot.Esc(TenHienThi(lead))}</b> — <i>{leadInfo}</i>");
+
+            if (mems.Count > 0)
+            {
+                sb.Append("\n\n⚔️ <b>Thành viên:</b>");
+                for (int i = 0; i < mems.Count; i++)
+                {
+                    string m = mems[i];
+                    bool mOnline = IsLoggedIn(m);
+                    string mChar = GetCharName(m);
+                    string mInfo = mOnline ? $"🟢 (NV: {TelegramBot.Esc(mChar)})" : "🔴 Offline";
+                    sb.Append($"\n  {i + 1}. <b>{TelegramBot.Esc(TenHienThi(m))}</b> — <i>{mInfo}</i>");
+                }
+            }
+
+            sb.Append("\n\n<i>➕ Thêm nick: <code>/team " + TelegramBot.Esc(key) + " add nick1 nick2</code></i>\n"
+                    + "<i>➖ Xoá nick: <code>/team " + TelegramBot.Esc(key) + " del nick1</code></i>\n"
+                    + "<i>👑 Đổi trưởng: <code>/team " + TelegramBot.Esc(key) + " lead nick2</code></i>");
+            return sb.ToString();
+        }
+
+        private string TeleThemNickVaoTeam(string tenTeam, List<string> rawNicks)
+        {
+            var teams = LoadTeams();
+            string key = teams.Keys.FirstOrDefault(k => string.Equals(k, tenTeam, StringComparison.OrdinalIgnoreCase)) ?? tenTeam;
+
+            string leader = "";
+            var members = new List<string>();
+
+            if (teams.TryGetValue(key, out var currentNicks) && currentNicks.Count > 0)
+            {
+                leader = currentNicks[0];
+                members = currentNicks.Skip(1).ToList();
+            }
+
+            var added = new List<string>();
+            var ignored = new List<string>();
+
+            foreach (var raw in rawNicks)
+            {
+                string u = TimUsername(raw);
+                if (string.IsNullOrEmpty(u)) continue;
+
+                if (string.IsNullOrEmpty(leader))
+                {
+                    leader = u;
+                    added.Add(u);
+                }
+                else if (string.Equals(u, leader, StringComparison.OrdinalIgnoreCase)
+                         || members.Contains(u, StringComparer.OrdinalIgnoreCase))
+                {
+                    ignored.Add(u);
+                }
+                else
+                {
+                    members.Add(u);
+                    added.Add(u);
+                }
+            }
+
+            if (added.Count == 0)
+            {
+                if (ignored.Count > 0)
+                    return $"👥⚠️ Các nick sau đã có sẵn trong đội hình <b>[team:{TelegramBot.Esc(key)}]</b>: {TelegramBot.Esc(string.Join(", ", ignored.Select(TenHienThi)))}.";
+                return "👥⚠️ Không có nick hợp lệ nào để thêm vào đội hình.";
+            }
+
+            string err = CapNhatDoiHinhFile(key, leader, members);
+            if (err.Contains("❌")) return err;
+
+            var sb = new StringBuilder();
+            sb.Append($"👥✅ <b>Đã thêm thành công {added.Count} nick vào [team:{TelegramBot.Esc(key)}]:</b>\n");
+            sb.Append($"➕ Đã thêm: <b>{TelegramBot.Esc(string.Join(", ", added.Select(TenHienThi)))}</b>\n");
+            if (ignored.Count > 0)
+            {
+                sb.Append($"ℹ️ Đã có sẵn: {TelegramBot.Esc(string.Join(", ", ignored.Select(TenHienThi)))}\n");
+            }
+            sb.Append($"\n👑 Đội trưởng: <b>{TelegramBot.Esc(TenHienThi(leader))}</b>\n");
+            if (members.Count > 0)
+            {
+                sb.Append($"⚔️ Thành viên ({members.Count}): {TelegramBot.Esc(string.Join(", ", members.Select(TenHienThi)))}");
+            }
+            return sb.ToString();
+        }
+
+        private string TeleXoaNickKhoiTeam(string tenTeam, List<string> rawNicks)
+        {
+            var teams = LoadTeams();
+            string key = teams.Keys.FirstOrDefault(k => string.Equals(k, tenTeam, StringComparison.OrdinalIgnoreCase));
+            if (key == null || !teams.TryGetValue(key, out var currentNicks) || currentNicks.Count == 0)
+            {
+                return $"👥⚠️ Không tìm thấy đội hình <b>[team:{TelegramBot.Esc(tenTeam)}]</b> trong <code>doi_hinh.cfg</code>.";
+            }
+
+            string leader = currentNicks[0];
+            var members = currentNicks.Skip(1).ToList();
+
+            var removed = new List<string>();
+            var notFound = new List<string>();
+            bool leaderRemoved = false;
+
+            foreach (var raw in rawNicks)
+            {
+                string u = TimUsername(raw);
+                if (string.IsNullOrEmpty(u)) continue;
+
+                if (string.Equals(u, leader, StringComparison.OrdinalIgnoreCase))
+                {
+                    removed.Add(u);
+                    leaderRemoved = true;
+                    leader = "";
+                }
+                else if (members.RemoveAll(m => string.Equals(m, u, StringComparison.OrdinalIgnoreCase)) > 0)
+                {
+                    removed.Add(u);
+                }
+                else
+                {
+                    notFound.Add(u);
+                }
+            }
+
+            if (removed.Count == 0)
+            {
+                return $"👥⚠️ Không tìm thấy nick nào trong danh sách cần xoá thuộc đội hình <b>[team:{TelegramBot.Esc(key)}]</b>.";
+            }
+
+            string donLeadMsg = "";
+            if (leaderRemoved)
+            {
+                if (members.Count > 0)
+                {
+                    leader = members[0];
+                    members.RemoveAt(0);
+                    donLeadMsg = $"\n👑 <i>Đã tự động đôn <b>{TelegramBot.Esc(TenHienThi(leader))}</b> lên làm Đội trưởng mới.</i>";
+                }
+                else
+                {
+                    // Nhóm không còn ai -> Xoá luôn nhóm khỏi file
+                    XoaTeamFile(key);
+                    return $"👥🗑️ <b>Đã xoá toàn bộ đội hình [team:{TelegramBot.Esc(key)}]</b> do không còn thành viên nào sau khi xoá.";
+                }
+            }
+
+            string err = CapNhatDoiHinhFile(key, leader, members);
+            if (err.Contains("❌")) return err;
+
+            var sb = new StringBuilder();
+            sb.Append($"👥🗑️ <b>Đã xoá {removed.Count} nick khỏi đội hình [team:{TelegramBot.Esc(key)}]:</b>\n");
+            sb.Append($"➖ Đã xoá: <b>{TelegramBot.Esc(string.Join(", ", removed.Select(TenHienThi)))}</b>\n");
+            if (notFound.Count > 0)
+            {
+                sb.Append($"ℹ️ Không có trong nhóm: {TelegramBot.Esc(string.Join(", ", notFound.Select(TenHienThi)))}\n");
+            }
+            if (!string.IsNullOrEmpty(donLeadMsg)) sb.Append(donLeadMsg + "\n");
+
+            sb.Append($"\n👑 Đội trưởng: <b>{TelegramBot.Esc(TenHienThi(leader))}</b>\n");
+            if (members.Count > 0)
+            {
+                sb.Append($"⚔️ Thành viên ({members.Count}): {TelegramBot.Esc(string.Join(", ", members.Select(TenHienThi)))}");
+            }
+            return sb.ToString();
+        }
+
+        private string TeleDoiTruongTeam(string tenTeam, string newLeaderRaw)
+        {
+            var teams = LoadTeams();
+            string key = teams.Keys.FirstOrDefault(k => string.Equals(k, tenTeam, StringComparison.OrdinalIgnoreCase));
+            if (key == null || !teams.TryGetValue(key, out var currentNicks) || currentNicks.Count == 0)
+            {
+                return $"👥⚠️ Không tìm thấy đội hình <b>[team:{TelegramBot.Esc(tenTeam)}]</b> trong <code>doi_hinh.cfg</code>.";
+            }
+
+            string newLeader = TimUsername(newLeaderRaw);
+            if (string.IsNullOrEmpty(newLeader))
+            {
+                return "👥⚠️ Tên nick trưởng nhóm không hợp lệ.";
+            }
+
+            string oldLeader = currentNicks[0];
+            if (string.Equals(oldLeader, newLeader, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"👥 <b>{TelegramBot.Esc(TenHienThi(newLeader))}</b> đã là trưởng nhóm của [team:{TelegramBot.Esc(key)}] rồi.";
+            }
+
+            var members = currentNicks.Skip(1).ToList();
+            members.RemoveAll(m => string.Equals(m, newLeader, StringComparison.OrdinalIgnoreCase));
+            if (!members.Contains(oldLeader, StringComparer.OrdinalIgnoreCase))
+            {
+                members.Insert(0, oldLeader);
+            }
+
+            string err = CapNhatDoiHinhFile(key, newLeader, members);
+            if (err.Contains("❌")) return err;
+
+            return $"👥👑 <b>Đã đổi trưởng nhóm [team:{TelegramBot.Esc(key)}]:</b>\n"
+                 + $"👑 Đội trưởng mới: <b>{TelegramBot.Esc(TenHienThi(newLeader))}</b>\n"
+                 + $"⚔️ Thành viên: {TelegramBot.Esc(string.Join(", ", members.Select(TenHienThi)))}";
+        }
+
+        private string TeleXoaTeam(string tenTeam)
+        {
+            if (string.IsNullOrWhiteSpace(tenTeam))
+            {
+                return "👥⚠️ Vui lòng nhập tên đội hình cần xoá: <code>/team del &lt;tên_team&gt;</code>";
+            }
+            if (tenTeam.StartsWith("team:", StringComparison.OrdinalIgnoreCase))
+                tenTeam = tenTeam.Substring(5).Trim();
+
+            return XoaTeamFile(tenTeam);
+        }
+
+        private string XoaTeamFile(string tenTeam)
+        {
+            try
+            {
+                string path = DoiHinhFilePath;
+                if (!File.Exists(path)) return $"👥⚠️ File <code>doi_hinh.cfg</code> chưa tồn tại.";
+
+                List<string> lines = File.ReadAllLines(path, Encoding.UTF8).ToList();
+                string targetHeader1 = $"[team:{tenTeam}]";
+                string targetHeader2 = $"[{tenTeam}]";
+                int blockStart = -1;
+                int blockEnd = lines.Count;
+
+                for (int i = 0; i < lines.Count; i++)
+                {
+                    string t = lines[i].Trim();
+                    if (t.StartsWith("[") && t.EndsWith("]"))
+                    {
+                        if (string.Equals(t, targetHeader1, StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(t, targetHeader2, StringComparison.OrdinalIgnoreCase))
+                        {
+                            blockStart = i;
+                        }
+                        else if (blockStart >= 0)
+                        {
+                            blockEnd = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (blockStart < 0)
+                {
+                    return $"👥⚠️ Không tìm thấy đội hình <b>[team:{TelegramBot.Esc(tenTeam)}]</b> trong <code>doi_hinh.cfg</code>.";
+                }
+
+                lines.RemoveRange(blockStart, blockEnd - blockStart);
+                File.WriteAllLines(path, lines, new UTF8Encoding(false));
+                NapTeamCuaNick();
+
+                Log($"👥 Telegram: Đã xóa đội hình [team:{tenTeam}] khỏi doi_hinh.cfg");
+                return $"👥🗑️ <b>Đã xóa thành công đội hình [team:{TelegramBot.Esc(tenTeam)}]</b> khỏi <code>doi_hinh.cfg</code>.";
+            }
+            catch (Exception ex)
+            {
+                return $"👥❌ <b>Lỗi khi xóa đội hình:</b> {TelegramBot.Esc(ex.Message)}";
+            }
         }
 
         private string CapNhatDoiHinhFile(string tenTeam, string leader, List<string> members)
@@ -1021,7 +1448,8 @@ namespace Manager
                     ? File.ReadAllLines(path, Encoding.UTF8).ToList()
                     : new List<string>();
 
-                string targetHeader = $"[team:{tenTeam}]";
+                string targetHeader1 = $"[team:{tenTeam}]";
+                string targetHeader2 = $"[{tenTeam}]";
                 int blockStart = -1;
                 int blockEnd = lines.Count;
 
@@ -1030,7 +1458,8 @@ namespace Manager
                     string t = lines[i].Trim();
                     if (t.StartsWith("[") && t.EndsWith("]"))
                     {
-                        if (string.Equals(t, targetHeader, StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(t, targetHeader1, StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(t, targetHeader2, StringComparison.OrdinalIgnoreCase))
                         {
                             blockStart = i;
                         }
@@ -1044,12 +1473,15 @@ namespace Manager
 
                 var newBlock = new List<string>
                 {
-                    targetHeader,
+                    targetHeader1,
                     $"truong = {leader}"
                 };
                 foreach (var m in members)
                 {
-                    newBlock.Add(m);
+                    if (!string.IsNullOrWhiteSpace(m) && !string.Equals(m, leader, StringComparison.OrdinalIgnoreCase))
+                    {
+                        newBlock.Add(m);
+                    }
                 }
 
                 if (blockStart >= 0)
@@ -1232,40 +1664,45 @@ namespace Manager
             return
 @"🎮 <b>DANH SÁCH LỆNH BOT MANAGER LÀNG LÁ</b> 🎮
 
-🏰 <b>1. ẢI GIA TỘC</b>
-• <code>/agt all</code> — Chạy Ải gia tộc cho toàn bộ nick online
-• <code>/agt nick1 nick2</code> — Chạy cho các nick chỉ định
-• <code>/agt stop</code> — Dừng Ải gia tộc
+👥 <b>1. QUẢN LÝ ĐỘI HÌNH & DÙNG CHUNG CÁC MODULE</b>
+• <code>/team list</code> (hoặc <code>/team</code>) — Xem tất cả đội hình hiện có
+• <code>/team [tên_team]</code> — Xem chi tiết đội hình & trạng thái online
+• <code>/team [tên_team] add nick1 nick2 ...</code> — Thêm nick vào đội hình
+• <code>/team [tên_team] del nick1 nick2 ...</code> — Xoá nick khỏi đội hình (tự đôn trưởng nhóm mới)
+• <code>/team [tên_team] lead [nick]</code> — Đổi trưởng nhóm
+• <code>/team [tên_team] truong mem1 mem2 ...</code> — Tạo/ghi đè mới đội hình (tối đa 6 nick)
+• <code>/team del [tên_team]</code> — Xoá toàn bộ 1 đội hình
+👉 <i>Đội hình được dùng chung cho Cấm thuật (<code>/ct</code>), Sơn cáp (<code>/sc</code>) hoặc chạy theo team: <code>/nv team1</code>, <code>/dc team1</code>, <code>/kill team1</code>, <code>/wake team1</code>,...</i>
 
-▶️ <b>2. AUTO NHIỆM VỤ NGÀY</b>
-• <code>/nv all</code> — Bật Auto NV ngày cho tất cả nick
-• <code>/nv nick1 nick2</code> — Bật cho nick chỉ định
-• <code>/nv stop</code> — Tắt Auto NV ngày
-
-🏯 <b>3. ĐỊA CUNG</b>
-• <code>/diacung all</code> (hoặc <code>/dc all</code>) — Chạy Địa cung (tự nhận chìa/vào hầm)
-• <code>/diacung nick1 nick2</code> — Chạy cho nick chỉ định
-
-⚔️ <b>4. CẤM THUẬT & SƠN CÁP</b>
-• <code>/camthuat</code> (hoặc <code>/ct</code>) — Chạy Cấm thuật theo <code>doi_hinh.cfg</code>
+⚔️ <b>2. CẤM THUẬT & SƠN CÁP</b>
+• <code>/camthuat</code> (hoặc <code>/ct</code>) — Chạy Cấm thuật cho tất cả nhóm trong <code>doi_hinh.cfg</code>
+• <code>/ct [tên_team]</code> — Chạy Cấm thuật cho riêng 1 team (ví dụ: <code>/ct team1</code>)
 • <code>/camthuat stop</code> — Dừng Cấm thuật
-• <code>/soncap</code> (hoặc <code>/sc</code>) — Chạy Sơn cáp theo <code>doi_hinh.cfg</code>
+• <code>/soncap</code> (hoặc <code>/sc</code>) — Chạy Sơn cáp cho tất cả nhóm
+• <code>/sc [tên_team]</code> — Chạy Sơn cáp cho riêng 1 team (ví dụ: <code>/sc team1</code>)
 • <code>/soncap stop</code> — Dừng Sơn cáp
 
-🎒 <b>5. GOM ĐỒ & TIỆN ÍCH</b>
+🏰 <b>3. ẢI GIA TỘC</b>
+• <code>/agt all</code> (hoặc <code>/agt team1</code>) — Chạy Ải gia tộc cho toàn bộ hoặc theo team/nick
+• <code>/agt stop</code> — Dừng Ải gia tộc
+
+▶️ <b>4. AUTO NHIỆM VỤ NGÀY</b>
+• <code>/nv all</code> (hoặc <code>/nv team1</code>) — Bật Auto NV ngày cho tất cả hoặc theo team
+• <code>/nv stop</code> — Tắt Auto NV ngày
+
+🏯 <b>5. ĐỊA CUNG</b>
+• <code>/diacung all</code> (hoặc <code>/dc team1</code>) — Chạy Địa cung (tự nhận chìa/vào hầm)
+
+🎒 <b>6. GOM ĐỒ & TIỆN ÍCH</b>
 • <code>/gomdo</code> (hoặc <code>/gom</code>) — Gom đồ về lead theo <code>[gom]</code>
-• <code>/tinhthach all</code> (hoặc <code>/tt all</code>) — Đổi tinh thạch tại NPC Kinkaku
+• <code>/tinhthach all</code> (hoặc <code>/tt team1</code>) — Đổi tinh thạch tại NPC Kinkaku
 • <code>/quiz all</code> — Tự động trả lời Auto Quiz NPC
-• <code>/velang all</code> (hoặc <code>/vl all</code>) — Cho các nick về làng
+• <code>/velang all</code> (hoặc <code>/vl team1</code>) — Cho các nick về làng
 • <code>/stop all</code> — Dừng tất cả hoạt động
 
-💻 <b>6. QUẢN LÝ CLIENT GAME</b>
-• <code>/wake all</code> (hoặc <code>/wake nick1 nick2</code>) — Khởi chạy client game
-• <code>/kill all</code> (hoặc <code>/kill nick1 nick2</code>) — Tắt client của nick hoặc tắt hết
-
-👥 <b>7. QUẢN LÝ ĐỘI HÌNH</b>
-• <code>/team team1 lead nick2 nick3 nick4 nick5 nick6</code> — Cập nhật đội hình (tối đa 6 nick: 1 trưởng + 5 mem)
-• <code>/team list</code> — Xem danh sách đội hình hiện tại
+💻 <b>7. QUẢN LÝ CLIENT GAME</b>
+• <code>/wake all</code> (hoặc <code>/wake team1</code>) — Khởi chạy client game
+• <code>/kill all</code> (hoặc <code>/kill team1</code>) — Tắt client game
 
 ⏰ <b>8. HẸN GIỜ TỰ ĐỘNG</b>
 • <code>/hengio 14:30 agt all</code> — Hẹn chạy lúc 14:30

@@ -164,6 +164,7 @@ namespace Manager
         private Button btnGomDo;      // 🎒 gom đồ từ mem về lead
         private Button btnTinhThach;  // 💎 đổi đồ lấy tinh thạch ở NPC Kinkaku
         private Button btnQuiz;       // 🧠 Auto Quiz NPC
+        private Button btnGiftCode;   // 🎁 Auto nhập Giftcode
         // Đã bỏ nút "🔍 Soi menu NPC": câu hỏi của nó đã trả lời xong (mục con nằm sẵn trong
         // chuỗi của mục cha, xác nhận 11:20 ngày 29/07) và kết luận đã ghi vào quest_anchors.cfg.
         private Button btnGoExit;
@@ -498,6 +499,7 @@ namespace Manager
             btnGomDo     = MkBtn("🎒  Gom đồ về lead");
             btnTinhThach = MkBtn("💎  Đổi tinh thạch");
             btnQuiz      = MkBtn("🧠  Auto Quiz NPC");
+            btnGiftCode  = MkBtn("🎁  Nhập Giftcode");
 
             btnLaunch.Click += BtnLaunch_Click;
             btnStartAuto.Click += BtnStartAuto_Click;
@@ -518,6 +520,7 @@ namespace Manager
             btnGomDo.Click += BtnGomDo_Click;
             btnTinhThach.Click += BtnTinhThach_Click;
             btnQuiz.Click += BtnQuiz_Click;
+            btnGiftCode.Click += BtnGiftCode_Click;
 
             // ── NÚT HIỆN TRÊN GIAO DIỆN, theo đúng thứ tự xếp ──────────────────────────────
             //
@@ -528,7 +531,7 @@ namespace Manager
             _nutHien = new Button[] {
                 btnLaunch,   btnStartAuto, btnStopAuto,  btnCheckAll,
                 btnVillage,  btnKillGame,  btnDiaCung,   btnCamThuat,
-                btnSonCap,
+                btnSonCap,   btnGiftCode,
                 btnAgt,      btnHarvest,   btnItemList,  btnGomDo,
                 btnTinhThach, btnQuiz
             };
@@ -2562,6 +2565,52 @@ namespace Manager
                 (notLoggedIn > 0 ? $" (bỏ qua {notLoggedIn} nick chưa vào game)" : ""));
         }
 
+        private void BtnGiftCode_Click(object sender, EventArgs e)
+        {
+            var form = new GiftCodeForm(this);
+            form.Show(this);
+        }
+
+        public event Action<string, string, string, bool> GiftCodeResultReceived;
+
+        public void OnGiftCodeResult(string username, string code, string msg, bool success)
+        {
+            Log($"🎁 [{username}] Code '{code}': {msg}");
+            _syncContext?.Post(_ => GiftCodeResultReceived?.Invoke(username, code, msg, success), null);
+        }
+
+        public List<string> GetCheckedUsernamesForGiftCode()
+        {
+            return GetCheckedUsernames();
+        }
+
+        public List<string> GetOnlineUsernames()
+        {
+            lock (_sessions)
+            {
+                return _sessions
+                    .Where(s => !string.IsNullOrEmpty(s.Username))
+                    .Select(s => s.Username)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+        }
+
+        public bool SendGiftCodeToUser(string username, string code)
+        {
+            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(code)) return false;
+            ClientSession session;
+            lock (_sessions)
+            {
+                session = _sessions.Find(s =>
+                    s.Username != null && s.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
+            }
+            if (session == null) return false;
+
+            session.SendRawJson("{\"command\":\"giftcode\",\"code\":\"" + EscapeJson(code) + "\"}\n");
+            return true;
+        }
+
         /// <summary>
         /// Địa cung — bước 1: bảo đảm các nick đang tick là TRƯỞNG của một nhóm.
         /// Hoạt động Địa cung chỉ cần "có nhóm + là trưởng", không cần mời thêm ai.
@@ -2801,36 +2850,48 @@ namespace Manager
             {
                 File.WriteAllText(DoiHinhFilePath, string.Join(Environment.NewLine, new[]
                 {
-                    "# Đội hình cho các hoạt động theo tổ đội.",
-                    "# Mỗi khối [...] là một nhóm, BÊN TRONG MỖI DÒNG MỘT NICK;",
-                    "# dòng có dấu '=' là khai vai, không phải thành viên.",
+                    "# ═══════════════════════════════════════════════════════════════════════════",
+                    "# ĐỘI HÌNH — DÙNG CHUNG CHO MỌI HOẠT ĐỘNG (Cấm thuật, Sơn cáp, Auto NV, Địa cung...)",
                     "#",
-                    "#     [team:1]           gom nick thành nhóm cho gọn khi khai [agt]",
-                    "#     [camthuat:CT-1]    truong  = <username trưởng nhóm>",
-                    "#     [soncap:SC-1]      truong  = <username trưởng nhóm>",
-                    "#     [agt]              mo_cua  = <username mở cửa ải>",
-                    "#     [gom]              nhan_do = <username nhận hết đồ>",
+                    "# Cú pháp:",
+                    "#   [team:tenTeam]  mở một khối đội hình",
+                    "#   truong = nick   khai đội trưởng (hoặc nick đầu tiên trong khối)",
+                    "#   nick_02         các thành viên trong nhóm",
+                    "#   \"#\"             ghi chú, tính tới hết dòng",
                     "#",
-                    "# Khai bằng TÀI KHOẢN ĐĂNG NHẬP (đúng như cột Username trên Manager);",
-                    "# Manager tự đổi sang tên nhân vật khi gửi lệnh.",
-                    "# KHÔNG cần khai map (lấy theo dòng 'village' trong quest_anchors.cfg)",
-                    "# và KHÔNG cần khai khu (trưởng nhóm chốt khu lúc chạy rồi báo lại).",
-                    "# Trong [agt] và [gom] viết 'team = 1,2' là lấy trọn nick của team 1 và 2.",
+                    "# Đội hình này được dùng chung cho tất cả các module:",
+                    "#   - Cấm thuật: /ct hoặc nút Cấm thuật trên tool",
+                    "#   - Sơn cáp:   /sc hoặc nút Sơn cáp trên tool",
+                    "#   - Auto NV / Địa cung theo team: /nv team1, /dc team1, /kill team1, /wake team1",
+                    "# Quản lý trực tiếp qua Telegram:",
+                    "#   /team team1 add nick1 nick2",
+                    "#   /team team1 del nick1",
+                    "#   /team list",
+                    "# ═══════════════════════════════════════════════════════════════════════════",
+                    "",
+                    "[chung]",
+                    "max_client      = 12",
+                    "login_cho_giay = 120",
+                    "login_thu_lai  = 2",
                     "",
                     "#[team:1]",
-                    "#taikhoan01",
-                    "#taikhoan02",
-                    "",
-                    "#[camthuat:CT-1]",
                     "#truong = taikhoan01",
                     "#taikhoan02",
+                    "#taikhoan03",
+                    "#taikhoan04",
+                    "",
+                    "#[agt]",
+                    "#mo_cua =",
+                    "",
+                    "#[gom]",
+                    "#nhan_do = taikhoan01",
                 }), new UTF8Encoding(false));
                 Log($"📄 Chưa có doi_hinh.cfg — đã tạo file mẫu tại {DoiHinhFilePath}");
             }
             catch (Exception ex) { Log($"❌ Không tạo được doi_hinh.cfg: {ex.Message}"); }
         }
 
-        /// <summary>Bảng team: tên team → danh sách nick, đúng thứ tự khai trong file.</summary>
+        /// <summary>Bảng team: tên team → danh sách nick (đội trưởng luôn đứng đầu), đúng thứ tự khai trong file.</summary>
         private Dictionary<string, List<string>> LoadTeams()
         {
             var kq = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
@@ -2839,6 +2900,13 @@ namespace Manager
                 if (k.Loai != "team") continue;
                 string ten = k.Ten.Length > 0 ? k.Ten : "?";
                 if (!kq.TryGetValue(ten, out var ds)) { ds = new List<string>(); kq[ten] = ds; }
+
+                // Đội trưởng khai qua truong= / lead= luôn đứng đầu danh sách
+                if (!string.IsNullOrEmpty(k.Vai) && !ds.Any(x => string.Equals(x, k.Vai, StringComparison.OrdinalIgnoreCase)))
+                {
+                    ds.Add(k.Vai);
+                }
+
                 foreach (var n in k.Nicks)
                     if (!ds.Any(x => string.Equals(x, n, StringComparison.OrdinalIgnoreCase)))
                         ds.Add(n);
@@ -2929,8 +2997,8 @@ namespace Manager
 
 
         /// <summary>
-        /// Đọc đội hình của MỘT loại hoạt động: "camthuat" | "soncap" | "agt" | "gom".
-        /// Mỗi loại đọc tách nhau nên Cấm thuật và Sơn cáp không giẫm lên đội hình của nhau.
+        /// Đọc đội hình của MỘT loại hoạt động: "camthuat" | "soncap" | "agt" | "gom" | "team".
+        /// Với Cấm thuật & Sơn cáp: Tự động dùng chung các khối [team:...] được khai hoặc setup qua Telegram.
         /// </summary>
         private List<GroupSetup> LoadNhom(string loai)
         {
@@ -2941,50 +3009,79 @@ namespace Manager
             Dictionary<string, List<string>> teams = null;   // chỉ dựng khi thật sự có khai "team ="
             int stt = 0;
 
-            foreach (var k in khoi)
+            // Xác định xem có ưu tiên dùng khối [team:...] cho hoạt động theo nhóm (camthuat, soncap) không
+            bool isTeamActivity = string.Equals(loai, "camthuat", StringComparison.OrdinalIgnoreCase)
+                               || string.Equals(loai, "soncap", StringComparison.OrdinalIgnoreCase)
+                               || string.Equals(loai, "team", StringComparison.OrdinalIgnoreCase);
+
+            var matchingBlocks = new List<DoiHinhKhoi>();
+            if (isTeamActivity)
             {
-                if (!string.Equals(k.Loai, loai, StringComparison.OrdinalIgnoreCase)) continue;
+                var teamBlocks = khoi.Where(k => string.Equals(k.Loai, "team", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (teamBlocks.Count > 0)
+                {
+                    matchingBlocks = teamBlocks;
+                }
+                else
+                {
+                    matchingBlocks = khoi.Where(k => string.Equals(k.Loai, loai, StringComparison.OrdinalIgnoreCase)).ToList();
+                }
+            }
+            else
+            {
+                matchingBlocks = khoi.Where(k => string.Equals(k.Loai, loai, StringComparison.OrdinalIgnoreCase)).ToList();
+            }
+
+            foreach (var k in matchingBlocks)
+            {
                 stt++;
 
-                // Thứ tự thành viên = thứ tự khai. Cấm thuật gán vai theo thứ tự này, gom đồ mời
-                // theo thứ tự này — nên team gọi trước, nick lẻ khai thêm nối sau.
                 var tatCa = new List<string>();
+                if (!string.IsNullOrEmpty(k.Vai) && !tatCa.Any(x => string.Equals(x, k.Vai, StringComparison.OrdinalIgnoreCase)))
+                {
+                    tatCa.Add(k.Vai);
+                }
+
                 if (k.Teams.Count > 0)
                 {
                     teams = teams ?? LoadTeams();
                     foreach (var t in k.Teams)
                     {
-                        if (teams.TryGetValue(t, out var ds)) tatCa.AddRange(ds);
+                        if (teams.TryGetValue(t, out var ds))
+                        {
+                            foreach (var u in ds)
+                                if (!tatCa.Any(x => string.Equals(x, u, StringComparison.OrdinalIgnoreCase)))
+                                    tatCa.Add(u);
+                        }
                         else Log($"⚠️ doi_hinh.cfg: khối [{k.Nhan}] gọi team '{t}' nhưng không có khối [team:{t}]");
                     }
                 }
-                tatCa.AddRange(k.Nicks);
+                foreach (var n in k.Nicks)
+                {
+                    if (!tatCa.Any(x => string.Equals(x, n, StringComparison.OrdinalIgnoreCase)))
+                        tatCa.Add(n);
+                }
 
                 var g = new GroupSetup
                 {
-                    Name = k.Ten.Length > 0 ? k.Ten : (stt == 1 ? loai.ToUpperInvariant() : loai.ToUpperInvariant() + "-" + stt),
+                    Name = k.Ten.Length > 0 ? k.Ten : (stt == 1 ? k.Loai.ToUpperInvariant() : k.Loai.ToUpperInvariant() + "-" + stt),
                     Leader = k.Vai
                 };
-                // Quên khai vai thì lấy nick đầu khối — giữ đúng luật cũ của doi_hinh.cfg.
-                if (g.Leader.Length == 0 && tatCa.Count > 0)
+                if (string.IsNullOrEmpty(g.Leader) && tatCa.Count > 0)
                 {
                     g.Leader = tatCa[0];
-                    Log($"⚠️ doi_hinh.cfg: khối [{k.Nhan}] chưa khai vai — tạm lấy '{g.Leader}' làm người cầm trịch");
                 }
+
                 foreach (var m in tatCa)
                 {
-                    // Người cầm trịch lỡ khai lại trong phần thành viên thì bỏ: không thì nó tự
-                    // chờ / tự mời chính mình.
                     if (string.Equals(m, g.Leader, StringComparison.OrdinalIgnoreCase)) continue;
                     if (g.Members.Any(x => string.Equals(x, m, StringComparison.OrdinalIgnoreCase))) continue;
                     g.Members.Add(m);
                 }
-                if (g.Leader.Length > 0) result.Add(g);
+                if (!string.IsNullOrEmpty(g.Leader)) result.Add(g);
             }
 
-            // Một nick chỉ được thuộc ĐÚNG MỘT nhóm trong cùng hoạt động. Khai trùng thì mọi đường
-            // định tuyến của Manager (phát khu, cho phép mở hầm, báo xong lượt) đều lấy nhóm ĐẦU
-            // TIÊN khớp, nên nhóm sau ngồi chờ một nick không bao giờ báo về — treo im không rõ lý do.
+            // Một nick chỉ được thuộc ĐÚNG MỘT nhóm trong cùng hoạt động.
             var daGap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var g in result)
             {
@@ -3003,7 +3100,7 @@ namespace Manager
         }
 
         /// <summary>Tên nhân vật đang dùng của một tài khoản; rỗng nếu nick chưa vào game.</summary>
-        private string GetCharName(string username)
+        public string GetCharName(string username)
         {
             lock (_accountLevels)
             {
@@ -4864,6 +4961,17 @@ namespace Manager
                                 bool ok = data.TryGetValue("ok", out var okD)
                                           && bool.TryParse(okD.ToString(), out bool b) && b;
                                 _mainForm.RelayDiaCungEnd(user, ok, detail);
+                                continue;
+                            }
+
+                            // ── giftcode_result: kết quả nhập giftcode ──
+                            if (data.TryGetValue("type", out var typeGc) && typeGc.ToString() == "giftcode_result")
+                            {
+                                string user = data.TryGetValue("username", out var uGc) ? uGc.ToString() : Username;
+                                string code = data.TryGetValue("code", out var cGc) ? cGc.ToString() : "";
+                                string msg = data.TryGetValue("msg", out var mGc) ? mGc.ToString() : "";
+                                bool success = data.TryGetValue("success", out var sGc) && bool.TryParse(sGc.ToString(), out bool b) && b;
+                                _mainForm.OnGiftCodeResult(user, code, msg, success);
                                 continue;
                             }
 

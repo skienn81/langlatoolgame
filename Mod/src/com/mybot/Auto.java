@@ -1553,6 +1553,27 @@ public class Auto {
             } catch (Exception e) {
                 System.out.println("[MyBot] quiz_query_res error: " + e.getMessage());
             }
+        } else if (line.contains("\"command\":\"giftcode\"")) {
+            try {
+                String code = parseStringParam(line, "code", "");
+                System.out.println("[MyBot] Nhap giftcode: " + TaskManager.getInstance().addGiftCode(code));
+            } catch (Exception e) {
+                System.out.println("[MyBot] giftcode error: " + e.getMessage());
+            }
+        } else if (line.contains("\"command\":\"giftcode_batch\"")) {
+            try {
+                String codesStr = parseStringParam(line, "codes", "");
+                System.out.println("[MyBot] Nhap giftcode batch: " + TaskManager.getInstance().addGiftCodesString(codesStr));
+            } catch (Exception e) {
+                System.out.println("[MyBot] giftcode_batch error: " + e.getMessage());
+            }
+        } else if (line.contains("\"command\":\"giftcode_stop\"")) {
+            try {
+                TaskManager.getInstance().stopGiftCode();
+                System.out.println("[MyBot] Giftcode stopped");
+            } catch (Exception e) {
+                System.out.println("[MyBot] giftcode_stop error: " + e.getMessage());
+            }
         } else if (line.contains("\"command\":\"gom_lead_start\"")) {
             try {
                 System.out.println("[MyBot] " + TaskManager.getInstance().startGomLead());

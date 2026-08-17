@@ -20,9 +20,9 @@ dslist_tmp.txt
 temp_path.txt
 
 # ── 2. MÃ CỦA GAME — của nhà phát hành, không phải của dự án này ───────────
-# client_modded.jar: người dùng tự lấy từ bản game mình cài (xem HUONG_DAN_SETUP.md).
-client_modded.jar
-client_modded_new.jar
+# client_modded.jar: cho phép theo dõi để đồng bộ bản build
+# client_modded.jar
+# client_modded_new.jar
 decompiled/
 decompiled_*.java
 temp_decompile/
