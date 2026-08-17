@@ -2420,22 +2420,44 @@ public class TaskManager {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // ĐỊA CUNG — một máy trạng thái chạy trọn hoạt động
+    // ĐỊA CUNG — MÁY TRẠNG THÁI (SOLO & TEAM)
     // ══════════════════════════════════════════════════════════════
-    // Chạy độc lập với Auto NV vì mọi bước đều phải chờ server:
-    // CMD 43 trả về sau khi lập nhóm, dialog NPC về sau khi mở, v.v.
-    // Thứ tự quan trọng: VỀ MAP TRƯỚC rồi mới lập nhóm. Lập nhóm ở map đang đứng là vô ích
-    // vì đi sang map khác thì khu đổi hết, và nếu phải nhảy khu thì cũng nhảy nhầm map.
-    private static final int DC_GOTO_MAP = 1;   // về map có NPC
-    private static final int DC_GROUP    = 2;   // bảo đảm là trưởng của một nhóm
-    private static final int DC_FIND_NPC = 3;   // tìm NPC + đi tới
-    private static final int DC_OPEN_NPC = 4;   // gửi CMD 54
-    private static final int DC_GET_KEY  = 5;   // chờ dialog + chọn mục nhận chìa
-    private static final int DC_REOPEN_NPC = 6; // đóng dialog sót + mở lại NPC
-    private static final int DC_ENTER    = 7;   // chọn hầm theo tier
-    private static final int DC_VERIFY   = 8;   // xác nhận đã vào (mapId đổi)
-    private static final int DC_IN_DUNGEON = 9; // đang trong hầm, chờ ra rồi bàn giao AFK
+    public static final int DC_ROLE_SOLO   = 0;
+    public static final int DC_ROLE_LEADER = 1;
+    public static final int DC_ROLE_MEMBER = 2;
 
+    // Solo states
+    private static final int DC_GOTO_MAP   = 1;   // về map có NPC
+    private static final int DC_GROUP      = 2;   // bảo đảm là trưởng của một nhóm solo
+    private static final int DC_FIND_NPC   = 3;   // tìm NPC + đi tới
+    private static final int DC_OPEN_NPC   = 4;   // gửi CMD 54 mở NPC
+    private static final int DC_GET_KEY    = 5;   // chọn mục nhận chìa (1 lần/ngày)
+    private static final int DC_REOPEN_NPC = 6;   // đóng dialog sót + mở lại NPC
+    private static final int DC_ENTER      = 7;   // chọn hầm (theo dcSavedTier hoặc thử lần lượt các cửa)
+    private static final int DC_VERIFY     = 8;   // xác nhận đã vào (mapId đổi)
+    private static final int DC_IN_DUNGEON = 9;   // đang trong hầm, đánh quái, chờ ra rồi lặp lại
+
+    // Leader states
+    private static final int DC_L_GOTO_MAP = 11;  // Lead về map làng trước
+    private static final int DC_L_GROUP    = 12;  // Lead tìm khu < 5 người, tạo nhóm
+    private static final int DC_L_UNLOCK   = 13;  // Lead mở khoá nhóm + auto accept
+    private static final int DC_L_ANNOUNCE = 14;  // Lead báo map/khu/tọa độ về Manager
+    private static final int DC_L_WAIT     = 15;  // Lead mời & chờ đủ thành viên
+    private static final int DC_L_GOTO_NPC = 16;  // Lead dẫn nhóm tới NPC Raikage
+    private static final int DC_L_OPEN_NPC = 17;  // Lead mở NPC
+    private static final int DC_L_GET_KEY  = 18;  // Lead nhận chìa (1 lần/ngày)
+    private static final int DC_L_REOPEN_NPC = 19;
+    private static final int DC_L_ENTER    = 20;  // Lead chọn cửa (đã lưu hoặc thử cửa)
+    private static final int DC_L_VERIFY   = 21;  // Lead chờ map đổi
+
+    // Member states
+    private static final int DC_M_GOTO_MAP = 31;  // Member về map làng
+    private static final int DC_M_WAIT_ZONE = 32; // Chờ Manager báo khu của Lead
+    private static final int DC_M_GOTO_ZONE = 33; // Chuyển sang khu của Lead
+    private static final int DC_M_JOIN     = 34;  // Tới NPC/Lead, vào nhóm Lead
+    private static final int DC_M_STANDBY  = 35;  // Đứng chờ Lead mở cửa địa cung
+
+    private int dcRole = DC_ROLE_SOLO; // 0=Solo, 1=Leader, 2=Member
     private int dcStep = 0;           // 0 = tắt
     private long dcNextTime = 0;
     private long dcDeadline = 0;
@@ -2443,22 +2465,43 @@ public class TaskManager {
     private int dcWalkTries = 0;      // số lần đã đi tới toạ độ dự phòng trong config
     private int dcKickTries = 0;      // số lần đã đuổi người thừa khỏi nhóm để đi Địa cung một mình
     private String tierPicked = "";   // mục hầm đã bấm, để câu báo lỗi nêu đích danh
-    private boolean dcLockSent = false; // đã gửi CMD 42 khoá nhóm chưa (lệnh ĐẢO, chỉ gửi một lần)
+    private boolean dcLockSent = false; // đã gửi CMD 42 khoá nhóm chưa
     private int dcGroupSentZone = -1; // khu đã gửi CMD 41 và đang chờ kết quả
     private int dcZoneCursor = -1;    // khu đang nhắm tới khi phải nhảy khu
     private int dcZoneHops = 0;       // số lần đã nhảy khu vì khu đầy nhóm
     private boolean dcZonePending = false; // đã gửi lệnh đổi khu, đang chờ tới nơi
     private int dcZoneWaits = 0;      // số vòng đã chờ đổi khu mà chưa tới
     private int dcTier = 0;           // hầm cần vào (1..4); 0 = lấy từ config
+    private int dcSavedTier = 0;      // Cửa địa cung đã vào thành công (lưu lại để đi liên tục)
     private boolean dcSkipKey = false; // hôm nay đã nhận chìa rồi (Manager báo sang)
+    private boolean dcKeyClaimed = false; // đã bấm nhận chìa hôm nay chưa
     private int dcMapBefore = -1;     // map ngay trước khi bấm vào hầm, để so sánh
     private int dcVerifyWaits = 0;    // số vòng đã chờ map đổi
     private int dcDungeonMap = -1;    // map của hầm đang ở trong; rời map này = hầm kết thúc
+    private int dcFailTries = 0;      // số lần thử vào cửa thất bại (tối đa 3 lần)
+    private int dcDoorTryIndex = 0;   // chỉ số cửa đang thử trong danh sách cửa
+    private java.util.List<Integer> dcDoorCandidates = new java.util.ArrayList<Integer>();
+
+    // Team variables
+    private java.util.List<String> dcMembers = new java.util.ArrayList<String>();
+    private String dcLeaderName = "";
+    private int dcExpected = 0;
+    private int dcSlot = 0;
+    private int dcWantMap = 0;
+    private int dcWantZone = 0;
+    private int dcWantX = -1;
+    private int dcWantY = -1;
+    private int dcJoinTries = 0;
+    private long dcNextInvite = 0;
+    private long dcFullSince = 0;
+    private boolean dcPrevAutoAccept = false;
+    private boolean dcAutoAcceptChanged = false;
+    private long dcZoneFullAt = 0;
 
     /**
-     * Bắt đầu hoạt động Địa cung. Kết quả đẩy về Manager bất đồng bộ.
-     * @param tier    hầm cần vào 1..4 (sơ/trung/cao/thượng cấp); 0 = lấy từ config
-     * @param skipKey hôm nay đã nhận chìa rồi thì bỏ qua bước nhận, vào thẳng hầm
+     * Bắt đầu hoạt động Địa cung (Solo).
+     * @param tier    hầm cần vào 1..4 (sơ/trung/cao/thượng cấp); 0 = tự thử các cửa
+     * @param skipKey hôm nay đã nhận chìa rồi thì bỏ qua bước nhận chìa
      */
     public String startDiaCung(int tier, boolean skipKey) {
         if (!reflectionReady) initReflection();
@@ -2467,27 +2510,150 @@ public class TaskManager {
             return "LOI: chua map duoc doi tuong nhom (a.em) - xem log reflection";
         }
         stopCurrentActivity();
+        resetDiaCung();
+        dcRole = DC_ROLE_SOLO;
         dcStep = DC_GOTO_MAP;
         dcNextTime = 0;
+        dcTier = tier;
+        dcSavedTier = (tier > 0) ? tier : 0;
+        dcSkipKey = skipKey;
+        dcKeyClaimed = skipKey;
+        dcFailTries = 0;
+        dcDoorTryIndex = 0;
+        dcDoorCandidates.clear();
+        dcDeadline = System.currentTimeMillis() + getSettingInt("dia_cung_timeout_ms", 180000);
+        String mapTxt = "?";
+        try { mapTxt = String.valueOf(getCurrentMapId()); } catch (Exception ignore) {}
+        log("Dia cung (Solo): bat dau (map " + mapTxt + ", khu " + getCurrentZoneId() + ")"
+                + (dcSavedTier > 0 ? (" [cua da luu: " + dcSavedTier + "]") : " [se thu tat ca cac cua]"));
+        return "da bat dau Dia cung (Solo)";
+    }
+
+    /**
+     * Bắt đầu hoạt động Địa cung (Trưởng nhóm).
+     */
+    public String startDiaCungLeader(java.util.List<String> memberNames, int expected,
+                                     int zoneSlot, int zoneSlots) {
+        if (!reflectionReady) initReflection();
+        if (!reflectionReady) return "LOI: reflection chua san sang";
+        if (zFieldGroup == null || emMethodQ == null || emMethodP == null) {
+            return "LOI: chua map duoc doi tuong nhom (a.em)";
+        }
+        stopCurrentActivity();
+        resetDiaCung();
+        dcRole = DC_ROLE_LEADER;
+        dcStep = DC_L_GOTO_MAP;
+        dcMembers = (memberNames != null) ? memberNames : new java.util.ArrayList<String>();
+        dcExpected = (expected > 0) ? expected : (1 + dcMembers.size());
+        int khuDau = khuXuatPhatNhom(zoneSlot, zoneSlots, getSettingInt("dia_cung_max_zone", 30));
+        dcZoneCursor = khuDau - 1;
+        dcFailTries = 0;
+        dcDoorTryIndex = 0;
+        dcDoorCandidates.clear();
+        dcDeadline = System.currentTimeMillis() + getSettingInt("dia_cung_group_timeout_ms", 300000);
+        log("Dia cung (Lead): bat dau gom nhom, si so dich " + dcExpected + ", thanh vien: " + dcMembers);
+        return "da bat dau Dia cung (Lead)";
+    }
+
+    /**
+     * Bắt đầu hoạt động Địa cung (Thành viên).
+     */
+    public String startDiaCungMember(String leaderName, int slot) {
+        if (!reflectionReady) initReflection();
+        if (!reflectionReady) return "LOI: reflection chua san sang";
+        if (zFieldGroup == null || emMethodQ == null) return "LOI: chua map duoc doi tuong nhom (a.em)";
+        if (leaderName == null || leaderName.trim().isEmpty()) return "LOI: thieu ten truong nhom";
+        stopCurrentActivity();
+        resetDiaCung();
+        dcRole = DC_ROLE_MEMBER;
+        dcStep = DC_M_GOTO_MAP;
+        dcLeaderName = leaderName.trim();
+        dcSlot = Math.max(0, slot);
+        dcFailTries = 0;
+        dcDeadline = System.currentTimeMillis() + getSettingInt("dia_cung_group_timeout_ms", 300000);
+        log("Dia cung (Member): bam theo Lead '" + dcLeaderName + "' (slot " + dcSlot + ")");
+        return "da bat dau Dia cung (Member)";
+    }
+
+    /** Nhận toạ độ / khu của Lead từ Manager. */
+    public String setDiaCungTarget(int mapId, int zoneId, String leaderName, int leaderX, int leaderY) {
+        if (dcRole != DC_ROLE_MEMBER || dcStep == 0) return "LOI: nick nay khong o vai thanh vien";
+        if (leaderName != null && !leaderName.trim().isEmpty()) dcLeaderName = leaderName.trim();
+        if (mapId > 0) dcWantMap = mapId;
+        if (leaderX >= 0 && leaderY >= 0) {
+            dcWantX = leaderX;
+            dcWantY = leaderY;
+        }
+        boolean moved = (zoneId != dcWantZone);
+        dcWantZone = zoneId;
+        if (moved && dcStep >= DC_M_WAIT_ZONE) {
+            dcStep = DC_M_GOTO_ZONE;
+            dcZonePending = false;
+            dcZoneWaits = 0;
+            dcJoinTries = 0;
+            dcNextTime = 0;
+            dcDeadline = System.currentTimeMillis() + getSettingInt("dia_cung_group_timeout_ms", 300000);
+        }
+        log("Dia cung: nhan diem tap ket map " + dcWantMap + " khu " + dcWantZone + " cua '" + dcLeaderName + "'");
+        return "da nhan khu " + zoneId;
+    }
+
+    /** Lead nhận thông báo khu đầy người từ Manager. */
+    public void notifyDiaCungZoneFull(String memberName, int wantZone) {
+        if (dcRole == DC_ROLE_LEADER && dcStep == DC_L_WAIT) {
+            int curZone = getCurrentZoneId();
+            if (wantZone <= 0 || wantZone == curZone) {
+                dcZoneFullAt = System.currentTimeMillis();
+                log("Dia cung: member '" + memberName + "' bao khu " + curZone + " DAY NGUOI -> se doi khu");
+            }
+        }
+    }
+
+    public void stopDiaCung() {
+        finishDiaCung(false, "da nhan lenh dung Dia cung");
+    }
+
+    public void resetDiaCung() {
+        dcRole = DC_ROLE_SOLO;
+        dcStep = 0;
+        dcNextTime = 0;
+        dcDeadline = 0;
         dcNpcId = -1;
         dcWalkTries = 0;
         dcKickTries = 0;
+        tierPicked = "";
         dcLockSent = false;
         dcGroupSentZone = -1;
         dcZoneCursor = -1;
         dcZoneHops = 0;
         dcZonePending = false;
         dcZoneWaits = 0;
-        dcTier = tier;
-        dcSkipKey = skipKey;
+        dcTier = 0;
+        dcSavedTier = 0;
+        dcSkipKey = false;
+        dcKeyClaimed = false;
         dcMapBefore = -1;
         dcVerifyWaits = 0;
         dcDungeonMap = -1;
-        dcDeadline = System.currentTimeMillis() + getSettingInt("dia_cung_timeout_ms", 120000);
-        String mapTxt = "?";
-        try { mapTxt = String.valueOf(getCurrentMapId()); } catch (Exception ignore) {}
-        log("Dia cung: bat dau (map " + mapTxt + ", khu " + getCurrentZoneId() + ")");
-        return "da bat dau Dia cung";
+        dcFailTries = 0;
+        dcDoorTryIndex = 0;
+        dcDoorCandidates.clear();
+        dcMembers.clear();
+        dcLeaderName = "";
+        dcExpected = 0;
+        dcSlot = 0;
+        dcWantMap = 0;
+        dcWantZone = 0;
+        dcWantX = -1;
+        dcWantY = -1;
+        dcJoinTries = 0;
+        dcNextInvite = 0;
+        dcFullSince = 0;
+        if (dcAutoAcceptChanged) {
+            try { setAutoAcceptGroup(dcPrevAutoAccept); } catch (Exception ignore) {}
+            dcAutoAcceptChanged = false;
+        }
+        dcZoneFullAt = 0;
     }
 
     /** Đẩy một mốc tiến trình về Manager để theo dõi, không kết thúc luồng. */
@@ -2499,25 +2665,21 @@ public class TaskManager {
     /** Kết thúc hoạt động và đẩy kết quả về Manager. */
     private void finishDiaCung(boolean ok, String detail) {
         dcStep = 0;
-        // GIẢI TÁN NHÓM khi xong. Địa cung đi một mình nên nhóm này không còn việc gì; để lại
-        // thì lượt hoạt động sau phải mất công dọn. Quan trọng nhất là chiều Địa cung → Cấm
-        // thuật: Cấm thuật lập nhóm từ đầu, gặp nick còn dính nhóm cũ (lại đang KHOÁ) là phải
-        // rời ra rồi mới lập được, chậm và dễ hỏng. Rời sạch ở đây thì lượt sau vào thẳng luồng.
+        if (dcAutoAcceptChanged) {
+            try { setAutoAcceptGroup(dcPrevAutoAccept); } catch (Exception ignore) {}
+            dcAutoAcceptChanged = false;
+        }
         if (getSettingInt("dia_cung_leave_group_after", 1) == 1) {
             try {
                 Object g = getGroupObj();
                 if (!hasNoGroup(g)) {
                     sendLeaveGroup();
-                    log("Dia cung: ket thuc -> gui CMD 44 roi nhom cho sach");
+                    log("Dia cung: ket thuc -> gui CMD 44 roi nhom");
                 }
             } catch (Exception e) {
                 log("Dia cung: khong roi duoc nhom: " + e.getMessage());
             }
         }
-        // Kết thúc kiểu gì cũng không để nhân vật đứng lại giữa làng. Trước đây chỉ đường THÀNH
-        // CÔNG mới bàn giao cho treo map, còn 6 đường hỏng (không thấy NPC, khu nào cũng đầy
-        // nhóm, hết giờ, bấm mà map không đổi...) thì bỏ mặc — nick đứng chôn chân ở làng cho
-        // tới khi có người để ý.
         diaCungHandoffAfk();
         log("Dia cung: " + (ok ? "XONG - " : "THAT BAI - ") + detail);
         pushDiaCung("dia_cung", ok, detail);
@@ -2536,20 +2698,43 @@ public class TaskManager {
         }
     }
 
-    /**
-     * Hạn giờ khi ĐANG Ở TRONG HẦM Địa cung. Mặc định KHÔNG giới hạn, giống Cấm thuật và cùng
-     * một lý do: xong hoặc hết giờ là game tự đẩy ra ngoài, nên không thể kẹt lại trong hầm.
-     * Đặt thêm một mốc của tool chỉ tạo ra rủi ro cắt oan một lượt đang chạy bình thường.
-     * Chỉ bật (giá trị > 0) nếu có lúc nào đó thấy nhân vật thật sự đứng lì trong hầm.
-     */
+    private void pushDiaCungZone(String detail, String leaderChar, int map, int zone, int x, int y) {
+        try {
+            java.io.PrintWriter w = Auto.getWriter();
+            if (w == null) return;
+            w.print("{\"type\":\"dia_cung_zone\",\"username\":\"" + escapeJson(Auto.getUsername()) + "\""
+                    + ",\"map\":" + map
+                    + ",\"zone\":" + zone
+                    + ",\"extra\":\"" + escapeJson(leaderChar) + "\""
+                    + ",\"x\":" + x
+                    + ",\"y\":" + y
+                    + ",\"detail\":\"" + escapeJson(detail) + "\"}\n");
+            w.flush();
+        } catch (Exception e) {
+            log("pushDiaCungZone error: " + e.getMessage());
+        }
+    }
+
+    private void pushDiaCungZoneFull(String detail, int wantZone) {
+        try {
+            java.io.PrintWriter w = Auto.getWriter();
+            if (w == null) return;
+            w.print("{\"type\":\"dia_cung_zone_full\",\"username\":\"" + escapeJson(Auto.getUsername()) + "\""
+                    + ",\"want_zone\":" + wantZone
+                    + ",\"detail\":\"" + escapeJson(detail) + "\"}\n");
+            w.flush();
+        } catch (Exception e) {
+            log("pushDiaCungZoneFull error: " + e.getMessage());
+        }
+    }
+
     private long diaCungDungeonDeadline(long now) {
         int ms = getSettingInt("dia_cung_run_timeout_ms", 0);
         return ms > 0 ? now + ms : Long.MAX_VALUE;
     }
 
     /**
-     * Bàn giao cho treo map AFK sau khi hoạt động Địa cung kết thúc. Không làm gì nếu đã ở sẵn
-     * trạng thái đó (đường thành công tự chuyển trước khi gọi finish) hoặc chưa cấu hình map treo.
+     * Bàn giao cho treo map AFK sau khi hoạt động Địa cung kết thúc.
      */
     private void diaCungHandoffAfk() {
         try {
@@ -2574,7 +2759,6 @@ public class TaskManager {
             }
             if (now < dcNextTime) return;
 
-            // Mọi mốc thời gian đều lấy từ quest_anchors.cfg, không nhúng số cứng trong code.
             final int groupWait = getSettingInt("dia_cung_group_wait_ms", 1500);
             final int zoneWait  = getSettingInt("dia_cung_zone_wait_ms", 2500);
             final int mapWait   = getSettingInt("dia_cung_map_wait_ms", 2500);
@@ -2585,400 +2769,854 @@ public class TaskManager {
             final int dlgPoll   = getSettingInt("dia_cung_dialog_poll_ms", 300);
             final int enterWait = getSettingInt("dia_cung_enter_wait_ms", 1500);
 
-            // Bước 2: bảo đảm đang là TRƯỞNG của một nhóm (nhóm 1 người là đủ).
-            // Chạy SAU khi đã về đúng map — lập nhóm ở map cũ rồi đi map khác là phí công.
-            if (dcStep == DC_GROUP) {
-                Object g = getGroupObj();
+            int villageMap = getSettingInt("dia_cung_map", 0);
+            if (villageMap <= 0) {
+                loadAnchorConfig();
+                if (villageConfig != null) villageMap = villageConfig[0];
+            }
+            if (villageMap <= 0) villageMap = 68;
 
-                if (!hasNoGroup(g) && isGroupLeader(g)) {
-                    java.util.List<String> names = getGroupMemberNames(g);
-
-                    // Là trưởng nhóm nhưng nhóm CÒN NGƯỜI KHÁC — xảy ra thật khi chạy Địa cung
-                    // ngay sau Cấm thuật: nhóm 4 người vẫn còn nguyên và đang khoá. Địa cung chỉ
-                    // cần nhóm một người, mà cú vào hầm của trưởng nhóm rất có thể KÉO THEO
-                    // người cùng khu như bên Cấm thuật ⇒ member bị lôi vào hầm của người khác
-                    // giữa lúc đang chạy lượt của chính mình, và có thể mất luôn lượt trong ngày.
-                    // Chưa kiểm chứng được là có kéo hay không, nên dọn sạch nhóm trước cho chắc.
-                    if (names.size() > 1 && getSettingInt("dia_cung_solo_group", 1) == 1) {
-                        int maxKick = getSettingInt("dia_cung_kick_tries", 3);
-                        if (dcKickTries < maxKick) {
-                            dcKickTries++;
-                            for (int i = 1; i < names.size(); i++) sendKickByName(names.get(i));
-                            sendDiaCungProgress("nhom con " + (names.size() - 1)
-                                    + " nguoi khac -> duoi ra de di mot minh (lan " + dcKickTries + ")");
-                            dcNextTime = now + groupWait;
-                            return;
-                        }
-                        // Không dọn được thì vẫn đi tiếp — chặn hẳn ở đây là làm hỏng một tính
-                        // năng vốn chạy được. Nhưng phải kêu to để còn biết mà xử lý.
-                        sendDiaCungProgress("CANH BAO: khong duoi het duoc nguoi trong nhom " + names
-                                + " -> van vao ham, ho co the bi keo theo");
-                    }
-
-                    // Còn lại một mình thì KHOÁ nhóm lại rồi mới đi. Không khoá thì suốt quãng
-                    // đi tới NPC và ở trong hầm vẫn có người chen vào được — công dọn nhóm ở
-                    // trên thành vô nghĩa. CMD 42 là lệnh ĐẢO trạng thái nên chỉ gửi ĐÚNG MỘT
-                    // LẦN; vòng sau đọc lại em.h để biết ăn chưa rồi đi tiếp dù thế nào.
-                    if (names.size() <= 1 && getSettingInt("dia_cung_lock_group", 1) == 1
-                            && !isGroupLocked(g) && !dcLockSent) {
-                        dcLockSent = true;
-                        sendToggleGroupLock();
-                        log("Dia cung: nhom con mot minh -> gui CMD 42 khoa nhom");
-                        dcNextTime = now + groupWait;
+            // ══════════════════════════════════════════════════════════════
+            // CHẾ ĐỘ 1: SOLO (ĐI ĐỘC LẬP 1 MÌNH)
+            // ══════════════════════════════════════════════════════════════
+            if (dcRole == DC_ROLE_SOLO) {
+                // Bước 1: về map làng
+                if (dcStep == DC_GOTO_MAP) {
+                    int curMap = getCurrentMapId();
+                    if (curMap != villageMap) {
+                        navigateToMap(villageMap);
+                        log("Dia cung (Solo): dang o map " + curMap + " -> di toi map " + villageMap);
+                        dcNextTime = now + mapWait;
                         return;
                     }
-
-                    sendDiaCungProgress("da la truong nhom (" + names.size() + " thanh vien) " + names
-                            + (isGroupLocked(g) ? " [da khoa nhom]" : " [chua khoa duoc nhom]"));
-                    dcStep = DC_FIND_NPC;
+                    dcStep = DC_GROUP;
                     dcNextTime = now + stepMs;
                     return;
                 }
 
-                if (!hasNoGroup(g)) {
-                    java.util.List<String> names = getGroupMemberNames(g);
-                    sendLeaveGroup();
-                    log("Dia cung: dang o nhom cua " + (names.isEmpty() ? "?" : names.get(0))
-                            + " -> gui CMD 44 roi nhom");
+                // Bước 2: bảo đảm là TRƯỞNG một nhóm solo
+                if (dcStep == DC_GROUP) {
+                    Object g = getGroupObj();
+                    if (!hasNoGroup(g) && isGroupLeader(g)) {
+                        java.util.List<String> names = getGroupMemberNames(g);
+                        if (names.size() > 1 && getSettingInt("dia_cung_solo_group", 1) == 1) {
+                            if (dcKickTries < getSettingInt("dia_cung_kick_tries", 3)) {
+                                dcKickTries++;
+                                for (int i = 1; i < names.size(); i++) sendKickByName(names.get(i));
+                                sendDiaCungProgress("nhom con " + (names.size() - 1) + " nguoi khac -> duoi ra de di solo");
+                                dcNextTime = now + groupWait;
+                                return;
+                            }
+                        }
+                        if (names.size() <= 1 && getSettingInt("dia_cung_lock_group", 1) == 1
+                                && !isGroupLocked(g) && !dcLockSent) {
+                            dcLockSent = true;
+                            sendToggleGroupLock();
+                            log("Dia cung (Solo): khoa nhom");
+                            dcNextTime = now + groupWait;
+                            return;
+                        }
+                        sendDiaCungProgress("da la truong nhom solo");
+                        dcStep = DC_FIND_NPC;
+                        dcNextTime = now + stepMs;
+                        return;
+                    }
+
+                    if (!hasNoGroup(g)) {
+                        sendLeaveGroup();
+                        log("Dia cung (Solo): roi nhom cu");
+                        dcNextTime = now + groupWait;
+                        return;
+                    }
+
+                    int zone = getCurrentZoneId();
+                    if (dcZonePending) {
+                        long khoa = zoneCooldownLeft(now);
+                        if (zone == dcZoneCursor) {
+                            dcZonePending = false;
+                            dcZoneWaits = 0;
+                        } else if (khoa > 0) {
+                            dcNextTime = now + khoa + 250;
+                            return;
+                        } else if (++dcZoneWaits > getSettingInt("dia_cung_zone_wait_tries", 3)) {
+                            dcZoneCursor = nextZoneToTry(dcZoneCursor, zone, getSettingInt("dia_cung_max_zone", 30));
+                            sendChangeZone(dcZoneCursor);
+                            dcZoneWaits = 0;
+                            dcNextTime = now + zoneWait;
+                            return;
+                        } else {
+                            dcNextTime = now + zoneWait;
+                            return;
+                        }
+                    }
+
+                    if (dcGroupSentZone >= 0 && dcGroupSentZone == zone) {
+                        int maxZone = getSettingInt("dia_cung_max_zone", 30);
+                        int maxHop = getSettingInt("dia_cung_max_zone_hop", 0);
+                        if (maxHop <= 0) maxHop = soKhuTrongDay(maxZone);
+                        if (dcZoneHops >= maxHop) {
+                            finishDiaCung(false, "da thu " + dcZoneHops + "/" + maxHop + " khu, khu nao cung day nhom");
+                            return;
+                        }
+                        dcZoneCursor = nextZoneToTry(dcZoneCursor, zone, maxZone);
+                        sendChangeZone(dcZoneCursor);
+                        dcZoneHops++;
+                        dcGroupSentZone = -1;
+                        dcZonePending = true;
+                        dcZoneWaits = 0;
+                        sendDiaCungProgress("khu " + zone + " day nhom -> doi sang khu " + dcZoneCursor);
+                        dcNextTime = now + zoneWait;
+                        return;
+                    }
+
+                    int playerCount = countPlayersInZone();
+                    int maxPlayers = getSettingInt("dia_cung_max_players_in_zone", 5);
+                    if (playerCount >= maxPlayers && dcZoneHops < 15) {
+                        int maxZone = getSettingInt("dia_cung_max_zone", 30);
+                        dcZoneCursor = nextZoneToTry(dcZoneCursor, zone, maxZone);
+                        sendChangeZone(dcZoneCursor);
+                        dcZoneHops++;
+                        dcGroupSentZone = -1;
+                        dcZonePending = true;
+                        dcZoneWaits = 0;
+                        sendDiaCungProgress("khu " + zone + " co " + playerCount + " nguoi (>= " + maxPlayers + ") -> tim khu < 5 nguoi, sang khu " + dcZoneCursor);
+                        dcNextTime = now + zoneWait;
+                        return;
+                    }
+
+                    sendCreateGroup();
+                    dcGroupSentZone = zone;
+                    log("Dia cung (Solo): tao nhom tai khu " + zone + " (" + playerCount + " nguoi)");
                     dcNextTime = now + groupWait;
                     return;
                 }
 
-                int zone = getCurrentZoneId();
-
-                // Đang chờ đổi khu: phải xác nhận ĐÃ TỚI khu đích rồi mới lập nhóm tiếp.
-                // Log thực tế cho thấy lệnh đổi khu có thể không ăn (khu đích đông người),
-                // nếu cứ gửi CMD 41 ngay thì lại lập nhóm ở đúng khu đầy vừa rời.
-                if (dcZonePending) {
-                    long khoa = zoneCooldownLeft(now);
-                    if (zone == dcZoneCursor) {
-                        dcZonePending = false;
-                        dcZoneWaits = 0;
-                    } else if (khoa > 0) {
-                        // CÒN KHOÁ THÌ "vẫn ở khu cũ" LÀ ĐÚNG, không phải lệnh không ăn.
-                        // KHÔNG tăng dcZoneWaits ở đây: đếm trong lúc khoá là kết luận hỏng khi
-                        // chưa có gì hỏng, rồi gửi lại vào giữa khoá — vừa sai vừa vô ích.
-                        dcNextTime = now + khoa + 250;
+                // Bước 3: tìm NPC Raikage + đi tới
+                if (dcStep == DC_FIND_NPC) {
+                    String npcName = getSetting("dia_cung_npc", "Raikage");
+                    int curMap = getCurrentMapId();
+                    int[] npc = findNpc(npcName, getSettingInt("dia_cung_npc_id", 59));
+                    if (npc == null) {
+                        int[] cfg = npcConfig.get("npc_dia_cung_" + curMap);
+                        if (cfg != null && dcWalkTries < getSettingInt("dia_cung_walk_tries", 3)) {
+                            dcWalkTries++;
+                            navigateTo(curMap, cfg[1], cfg[2]);
+                            log("Dia cung (Solo): di toi toa do config NPC (" + cfg[1] + "," + cfg[2] + ")");
+                            dcNextTime = now + walkWait;
+                            return;
+                        }
+                        finishDiaCung(false, "khong thay NPC '" + npcName + "' tren map " + curMap);
                         return;
-                    } else if (++dcZoneWaits > getSettingInt("dia_cung_zone_wait_tries", 3)) {
-                        dcZoneCursor = nextZoneToTry(dcZoneCursor, zone,
-                                getSettingInt("dia_cung_max_zone", 30));
-                        sendChangeZone(dcZoneCursor);
-                        dcZoneWaits = 0;
-                        log("Dia cung: doi khu khong an (van o khu " + zone + ") -> thu khu "
-                                + dcZoneCursor);
-                        dcNextTime = now + zoneWait;
+                    }
+                    dcNpcId = npc[0];
+                    int dx = Math.abs(getPlayerX() - npc[1]);
+                    int dy = Math.abs(getPlayerY() - npc[2]);
+                    int range = getSettingInt("dia_cung_npc_range", 60);
+                    if (dx > range || dy > range) {
+                        navigateTo(curMap, npc[1], npc[2]);
+                        dcNextTime = now + walkWait;
+                        return;
+                    }
+                    dcStep = DC_OPEN_NPC;
+                    dcNextTime = now + stepMs;
+                    return;
+                }
+
+                // Bước 4: mở NPC
+                if (dcStep == DC_OPEN_NPC) {
+                    closeAnyDialog();
+                    sendOpenNpc(dcNpcId);
+                    log("Dia cung (Solo): mo NPC id=" + dcNpcId);
+                    if (!dcKeyClaimed && !dcSkipKey) {
+                        dcStep = DC_GET_KEY;
+                    } else {
+                        dcStep = DC_ENTER;
+                    }
+                    dcNextTime = now + npcWait;
+                    return;
+                }
+
+                // Bước 5: nhận chìa (1 lần/ngày)
+                if (dcStep == DC_GET_KEY) {
+                    if (detectDialog() == null) { dcNextTime = now + dlgPoll; return; }
+                    String[] menu = readDialogMenuItems();
+                    if (menu == null || menu.length == 0) { dcNextTime = now + dlgPoll; return; }
+
+                    int keyIdx = getSettingInt("dia_cung_key_index", 0);
+                    if (keyIdx < 0 || keyIdx >= menu.length) {
+                        keyIdx = findMenuIndexByKeyword(menu, "chìa");
+                        if (keyIdx < 0) keyIdx = findMenuIndexByKeyword(menu, "chia");
+                    }
+
+                    if (keyIdx >= 0 && keyIdx < menu.length) {
+                        if (getSubMenuCount(menu, keyIdx) > 0) sendSelectMenuWithSub(dcNpcId, keyIdx, 0);
+                        else sendSelectMenu(dcNpcId, keyIdx);
+                        dcKeyClaimed = true;
+                        pushDiaCung("dia_cung_key_claimed", true, "da bam nhan chia [" + keyIdx + "] " + menu[keyIdx]);
+                        sendDiaCungProgress("da bam nhan chia [" + keyIdx + "] " + menu[keyIdx]);
+                        dcStep = DC_REOPEN_NPC;
+                        dcNextTime = now + npcWait;
                         return;
                     } else {
-                        dcNextTime = now + zoneWait;   // chờ thêm cho lệnh đổi khu kịp ăn
+                        dcKeyClaimed = true;
+                        dcStep = DC_ENTER;
+                        dcNextTime = now + stepMs;
                         return;
                     }
                 }
 
-                // Đã gửi CMD 41 ngay tại khu này mà vẫn chưa có nhóm ⇒ khu đã đủ số nhóm.
-                // Server chỉ hiện banner "Số nhóm trong khu vực đã đạt tối đa", không trả mã
-                // lỗi nào đọc được, nên chỉ có thể suy ra bằng hành vi như thế này.
-                if (dcGroupSentZone >= 0 && dcGroupSentZone == zone) {
-                    int maxZone = getSettingInt("dia_cung_max_zone", 30);
-                    // 0 = quét trọn một vòng: số lượt thử BẰNG số khu.
-                    // Con trỏ khu tiến đúng 1 mỗi lượt và vòng lại ở maxZone, nên maxHop == maxZone
-                    // là đi qua mỗi khu đúng một lần — không trùng, không sót. Buộc hai con số này
-                    // dính nhau ở đây thay vì bắt người dùng ghi tay cả hai: sửa max_zone mà quên
-                    // sửa số lượt thì thành quét thiếu (hoặc quét lặp) mà chẳng có gì báo.
-                    int maxHop = getSettingInt("dia_cung_max_zone_hop", 0);
-                    // Số lượt thử = SỐ KHU TRONG DÃY, không phải số khu lớn nhất. Từ khi có
-                    // `zone_min` thì dãy quét là [zone_min, max] chứ không còn [1, max] — lấy
-                    // maxZone làm số lượt là thừa ra đúng phần đầu dãy đã bị cắt.
-                    if (maxHop <= 0) maxHop = soKhuTrongDay(maxZone);
-                    if (dcZoneHops >= maxHop) {
-                        finishDiaCung(false, "da thu " + dcZoneHops + "/" + maxHop
-                                + " khu, khu nao cung day nhom");
+                // Bước 6: mở lại NPC để chọn hầm
+                if (dcStep == DC_REOPEN_NPC) {
+                    closeAnyDialog();
+                    sendOpenNpc(dcNpcId);
+                    dcStep = DC_ENTER;
+                    dcNextTime = now + npcWait;
+                    return;
+                }
+
+                // Bước 7: chọn hầm (theo tier đã lưu hoặc duyệt thử tất cả các cửa)
+                if (dcStep == DC_ENTER) {
+                    if (detectDialog() == null) { dcNextTime = now + dlgPoll; return; }
+                    String[] menu = readDialogMenuItems();
+                    if (menu == null || menu.length == 0) { dcNextTime = now + dlgPoll; return; }
+
+                    int keyIdx = getSettingInt("dia_cung_key_index", 0);
+
+                    // Nếu đã có cửa lưu hợp lệ
+                    if (dcSavedTier > 0 && dcSavedTier < menu.length && dcSavedTier != keyIdx) {
+                        dcMapBefore = getCurrentMapId();
+                        tierPicked = dcSavedTier + " " + menu[dcSavedTier];
+                        if (getSubMenuCount(menu, dcSavedTier) > 0) sendSelectMenuWithSub(dcNpcId, dcSavedTier, 0);
+                        else sendSelectMenu(dcNpcId, dcSavedTier);
+                        sendDiaCungProgress("vao thang cua da luu [" + dcSavedTier + "] " + menu[dcSavedTier]);
+                        dcStep = DC_VERIFY;
+                        dcNextTime = now + enterWait;
                         return;
                     }
-                    // Con trỏ khu luôn tiến, kể cả khi lần đổi khu trước thất bại câm
-                    // (khu đích đông người) — nếu bám theo khu hiện tại sẽ lặp mãi một đích.
-                    dcZoneCursor = nextZoneToTry(dcZoneCursor, zone, maxZone);
-                    sendChangeZone(dcZoneCursor);
-                    dcZoneHops++;
-                    dcGroupSentZone = -1;
-                    dcZonePending = true;    // chờ xác nhận tới nơi rồi mới lập nhóm
-                    dcZoneWaits = 0;
-                    sendDiaCungProgress("khu " + zone + " day nhom -> doi sang khu " + dcZoneCursor);
+
+                    // Nếu chưa có cửa lưu, xây dựng danh sách các cửa khả dụng
+                    if (dcDoorCandidates.isEmpty() || dcDoorTryIndex >= dcDoorCandidates.size()) {
+                        dcDoorCandidates.clear();
+                        for (int i = 0; i < menu.length; i++) {
+                            if (i == keyIdx) continue;
+                            String itemLower = noAccent(menu[i]).toLowerCase();
+                            if (itemLower.contains("thoat") || itemLower.contains("dong") || itemLower.contains("chia")) continue;
+                            dcDoorCandidates.add(i);
+                        }
+                        dcDoorTryIndex = 0;
+                    }
+
+                    if (dcDoorCandidates.isEmpty()) {
+                        finishDiaCung(false, "khong tim thay cua dia cung nao trong menu: " + java.util.Arrays.toString(menu));
+                        return;
+                    }
+
+                    int pickIdx = dcDoorCandidates.get(dcDoorTryIndex);
+                    dcMapBefore = getCurrentMapId();
+                    tierPicked = pickIdx + " " + menu[pickIdx];
+                    if (getSubMenuCount(menu, pickIdx) > 0) sendSelectMenuWithSub(dcNpcId, pickIdx, 0);
+                    else sendSelectMenu(dcNpcId, pickIdx);
+                    sendDiaCungProgress("thu cua [" + pickIdx + "] " + menu[pickIdx] + " (" + (dcDoorTryIndex + 1) + "/" + dcDoorCandidates.size() + ")");
+                    dcStep = DC_VERIFY;
+                    dcNextTime = now + enterWait;
+                    return;
+                }
+
+                // Bước 8: xác nhận đã vào hầm (map đổi)
+                if (dcStep == DC_VERIFY) {
+                    int nowMap = getCurrentMapId();
+                    if (nowMap != dcMapBefore) {
+                        dcDungeonMap = nowMap;
+                        if (dcDoorCandidates != null && dcDoorCandidates.size() > dcDoorTryIndex) {
+                            dcSavedTier = dcDoorCandidates.get(dcDoorTryIndex);
+                        }
+                        dcFailTries = 0;
+                        dcDoorTryIndex = 0;
+                        dcDoorCandidates.clear();
+                        sendDiaCungProgress("DA VAO DIA CUNG - Cua [" + tierPicked + "] (map " + dcMapBefore + " -> " + nowMap + ")");
+                        if (getSettingInt("dia_cung_combat", 1) == 1) {
+                            clearNavTarget();
+                            setAutoCombat(true);
+                            autoCombatRequested = true;
+                        }
+                        dcDeadline = diaCungDungeonDeadline(now);
+                        dcStep = DC_IN_DUNGEON;
+                        dcNextTime = now + pollMs;
+                        return;
+                    }
+
+                    // Map chưa đổi -> không vào được
+                    closeAnyDialog();
+                    if (!dcDoorCandidates.isEmpty()) {
+                        dcDoorTryIndex++;
+                        if (dcDoorTryIndex < dcDoorCandidates.size()) {
+                            // Thử cửa tiếp theo trong menu
+                            dcStep = DC_REOPEN_NPC;
+                            dcNextTime = now + stepMs;
+                            return;
+                        } else {
+                            // Đã thử hết toàn bộ các cửa một vòng
+                            dcFailTries++;
+                            dcDoorCandidates.clear();
+                            sendDiaCungProgress("Da thu toan bo cac cua dia cung (lan thu " + dcFailTries + "/3) chua vao duoc");
+                            if (dcFailTries < 3) {
+                                dcStep = DC_REOPEN_NPC;
+                                dcNextTime = now + 1500;
+                                return;
+                            } else {
+                                finishDiaCung(false, "Thu 3 lan toan bo cac cua khong vao duoc (het chia hoac het luot) -> quay ve bai Farm");
+                                return;
+                            }
+                        }
+                    } else if (dcSavedTier > 0) {
+                        dcFailTries++;
+                        sendDiaCungProgress("Vao cua da luu [" + dcSavedTier + "] khong thanh cong (lan thu " + dcFailTries + "/3)");
+                        if (dcFailTries < 3) {
+                            if (dcFailTries == 2) dcSavedTier = 0; // Thử quét lại tất cả các cửa nếu cửa đã lưu bị lỗi
+                            dcStep = DC_REOPEN_NPC;
+                            dcNextTime = now + 1500;
+                            return;
+                        } else {
+                            finishDiaCung(false, "Thu 3 lan khong vao duoc dia cung (het chia hoac het luot) -> quay ve bai Farm");
+                            return;
+                        }
+                    } else {
+                        dcFailTries++;
+                        if (dcFailTries < 3) {
+                            dcStep = DC_REOPEN_NPC;
+                            dcNextTime = now + 1500;
+                            return;
+                        } else {
+                            finishDiaCung(false, "Thu 3 lan khong vao duoc dia cung -> quay ve bai Farm");
+                            return;
+                        }
+                    }
+                }
+
+                // Bước 9: đang trong hầm địa cung
+                if (dcStep == DC_IN_DUNGEON) {
+                    int nowMap = getCurrentMapId();
+                    if (nowMap == dcDungeonMap) {
+                        if (getSettingInt("dia_cung_combat", 1) == 1 && !isAutoCombatOn()) {
+                            clearNavTarget();
+                            setAutoCombat(true);
+                        }
+                        dcNextTime = now + pollMs;
+                        return;
+                    }
+
+                    // Ra khỏi hầm -> lặp lại liên tục cho đến khi hết chìa!
+                    setAutoCombat(false);
+                    autoCombatRequested = false;
+                    sendDiaCungProgress("Da ra khoi dia cung (map " + nowMap + ") -> tiep tuc vao lai dia cung...");
+                    dcFailTries = 0;
+                    dcDoorTryIndex = 0;
+                    dcDoorCandidates.clear();
+                    dcStep = (nowMap == villageMap) ? DC_FIND_NPC : DC_GOTO_MAP;
+                    dcNextTime = now + stepMs;
+                    return;
+                }
+            }
+
+            // ══════════════════════════════════════════════════════════════
+            // CHẾ ĐỘ 2: TEAM LEADER (TRƯỞNG NHÓM)
+            // ══════════════════════════════════════════════════════════════
+            if (dcRole == DC_ROLE_LEADER) {
+                // Lead về làng trước
+                if (dcStep == DC_L_GOTO_MAP) {
+                    int curMap = getCurrentMapId();
+                    if (curMap != villageMap) {
+                        navigateToMap(villageMap);
+                        dcNextTime = now + mapWait;
+                        return;
+                    }
+                    dcStep = DC_L_GROUP;
+                    dcNextTime = now + stepMs;
+                    return;
+                }
+
+                // Lead tìm khu < 5 người và lập nhóm
+                if (dcStep == DC_L_GROUP) {
+                    Object g = getGroupObj();
+                    if (!hasNoGroup(g)) {
+                        if (!isGroupLeader(g)) {
+                            sendLeaveGroup();
+                            dcNextTime = now + groupWait;
+                            return;
+                        }
+                        dcStep = DC_L_UNLOCK;
+                        dcNextTime = now + stepMs;
+                        return;
+                    }
+
+                    int zone = getCurrentZoneId();
+                    if (dcZonePending) {
+                        long khoa = zoneCooldownLeft(now);
+                        if (zone == dcZoneCursor) {
+                            dcZonePending = false;
+                            dcZoneWaits = 0;
+                        } else if (khoa > 0) {
+                            dcNextTime = now + khoa + 250;
+                            return;
+                        } else if (++dcZoneWaits > 3) {
+                            dcZoneCursor = nextZoneToTry(dcZoneCursor, zone, getSettingInt("dia_cung_max_zone", 30));
+                            sendChangeZone(dcZoneCursor);
+                            dcZoneWaits = 0;
+                            dcNextTime = now + zoneWait;
+                            return;
+                        } else {
+                            dcNextTime = now + zoneWait;
+                            return;
+                        }
+                    }
+
+                    int playerCount = countPlayersInZone();
+                    int maxPlayers = getSettingInt("dia_cung_max_players_in_zone", 5);
+                    if (playerCount >= maxPlayers && dcZoneHops < 15) {
+                        int maxZone = getSettingInt("dia_cung_max_zone", 30);
+                        dcZoneCursor = nextZoneToTry(dcZoneCursor, zone, maxZone);
+                        sendChangeZone(dcZoneCursor);
+                        dcZoneHops++;
+                        dcZonePending = true;
+                        dcZoneWaits = 0;
+                        sendDiaCungProgress("Lead tim khu vang (< 5 nguoi), doi sang khu " + dcZoneCursor);
+                        dcNextTime = now + zoneWait;
+                        return;
+                    }
+
+                    sendCreateGroup();
+                    dcGroupSentZone = zone;
+                    log("Dia cung (Lead): lap nhom tai khu " + zone + " (" + playerCount + " nguoi)");
+                    dcNextTime = now + groupWait;
+                    return;
+                }
+
+                // Mở khoá nhóm + auto accept
+                if (dcStep == DC_L_UNLOCK) {
+                    Object g = getGroupObj();
+                    if (isGroupLocked(g)) {
+                        if (dcJoinTries < 3) {
+                            dcJoinTries++;
+                            sendToggleGroupLock();
+                            dcNextTime = now + groupWait;
+                            return;
+                        }
+                    }
+                    if (zFieldAh != null && !isAutoAcceptGroup()) {
+                        dcPrevAutoAccept = setAutoAcceptGroup(true);
+                        dcAutoAcceptChanged = true;
+                    }
+                    dcJoinTries = 0;
+                    dcStep = DC_L_ANNOUNCE;
+                    dcNextTime = now + stepMs;
+                    return;
+                }
+
+                // Lead báo map/khu/tọa độ về Manager
+                if (dcStep == DC_L_ANNOUNCE) {
+                    Object g = getGroupObj();
+                    java.util.List<String> names = getGroupMemberNames(g);
+                    String myName = names.isEmpty() ? "" : names.get(0);
+                    int zone = getCurrentZoneId();
+                    int map = getCurrentMapId();
+                    pushDiaCungZone("san sang nhan member", myName, map, zone, getPlayerX(), getPlayerY());
+                    log("Dia cung (Lead): da bao diem tap ket map " + map + " khu " + zone);
+                    dcStep = DC_L_WAIT;
+                    dcNextInvite = now;
+                    dcNextTime = now + stepMs;
+                    return;
+                }
+
+                // Lead chờ & mời thành viên
+                if (dcStep == DC_L_WAIT) {
+                    Object g = getGroupObj();
+                    if (hasNoGroup(g) || !isGroupLeader(g)) {
+                        finishDiaCung(false, "mat quyen truong nhom giua chung");
+                        return;
+                    }
+                    java.util.List<String> have = getGroupMemberNames(g);
+                    java.util.List<String> missing = new java.util.ArrayList<String>();
+                    for (String want : dcMembers) {
+                        if (want != null && !want.trim().isEmpty() && !groupHasMember(g, want)) {
+                            missing.add(want.trim());
+                        }
+                    }
+
+                    boolean complete = missing.isEmpty() && have.size() >= dcExpected;
+                    if (complete) {
+                        if (dcFullSince == 0) {
+                            dcFullSince = now;
+                            dcNextTime = now + 2000;
+                            return;
+                        }
+                        if (!isGroupLocked(g) && !dcLockSent) {
+                            dcLockSent = true;
+                            sendToggleGroupLock();
+                            dcNextTime = now + groupWait;
+                            return;
+                        }
+                        closeConfirmPopup();
+                        if (dcAutoAcceptChanged) {
+                            setAutoAcceptGroup(dcPrevAutoAccept);
+                            dcAutoAcceptChanged = false;
+                        }
+                        sendDiaCungProgress("Du doi hinh " + have.size() + " nguoi " + have + " -> Lead di toi NPC Raikage");
+                        dcStep = DC_L_GOTO_NPC;
+                        dcWalkTries = 0;
+                        dcNextTime = now + stepMs;
+                        return;
+                    }
+
+                    if (now >= dcNextInvite) {
+                        for (String m : missing) sendInviteByName(m);
+                        String myName = have.isEmpty() ? "" : have.get(0);
+                        pushDiaCungZone("dang cho member", myName, getCurrentMapId(), getCurrentZoneId(), getPlayerX(), getPlayerY());
+                        dcNextInvite = now + 4000;
+                    }
+
+                    dcNextTime = now + 1000;
+                    return;
+                }
+
+                // Lead dẫn tới NPC Raikage
+                if (dcStep == DC_L_GOTO_NPC) {
+                    String npcName = getSetting("dia_cung_npc", "Raikage");
+                    int curMap = getCurrentMapId();
+                    int[] npc = findNpc(npcName, getSettingInt("dia_cung_npc_id", 59));
+                    if (npc == null) {
+                        int[] cfg = npcConfig.get("npc_dia_cung_" + curMap);
+                        if (cfg != null && dcWalkTries < 3) {
+                            dcWalkTries++;
+                            navigateTo(curMap, cfg[1], cfg[2]);
+                            dcNextTime = now + walkWait;
+                            return;
+                        }
+                        finishDiaCung(false, "khong thay NPC '" + npcName + "' tren map " + curMap);
+                        return;
+                    }
+                    dcNpcId = npc[0];
+                    int dx = Math.abs(getPlayerX() - npc[1]);
+                    int dy = Math.abs(getPlayerY() - npc[2]);
+                    if (dx > 60 || dy > 60) {
+                        navigateTo(curMap, npc[1], npc[2]);
+                        dcNextTime = now + walkWait;
+                        return;
+                    }
+                    dcStep = DC_L_OPEN_NPC;
+                    dcNextTime = now + stepMs;
+                    return;
+                }
+
+                // Lead mở NPC
+                if (dcStep == DC_L_OPEN_NPC) {
+                    closeAnyDialog();
+                    sendOpenNpc(dcNpcId);
+                    if (!dcKeyClaimed && !dcSkipKey) {
+                        dcStep = DC_L_GET_KEY;
+                    } else {
+                        dcStep = DC_L_ENTER;
+                    }
+                    dcNextTime = now + npcWait;
+                    return;
+                }
+
+                // Lead nhận chìa (1 lần)
+                if (dcStep == DC_L_GET_KEY) {
+                    if (detectDialog() == null) { dcNextTime = now + dlgPoll; return; }
+                    String[] menu = readDialogMenuItems();
+                    if (menu == null || menu.length == 0) { dcNextTime = now + dlgPoll; return; }
+
+                    int keyIdx = getSettingInt("dia_cung_key_index", 0);
+                    if (keyIdx < 0 || keyIdx >= menu.length) {
+                        keyIdx = findMenuIndexByKeyword(menu, "chìa");
+                        if (keyIdx < 0) keyIdx = findMenuIndexByKeyword(menu, "chia");
+                    }
+                    if (keyIdx >= 0 && keyIdx < menu.length) {
+                        if (getSubMenuCount(menu, keyIdx) > 0) sendSelectMenuWithSub(dcNpcId, keyIdx, 0);
+                        else sendSelectMenu(dcNpcId, keyIdx);
+                        dcKeyClaimed = true;
+                        pushDiaCung("dia_cung_key_claimed", true, "Lead da nhan chia");
+                        dcStep = DC_L_REOPEN_NPC;
+                        dcNextTime = now + npcWait;
+                        return;
+                    } else {
+                        dcKeyClaimed = true;
+                        dcStep = DC_L_ENTER;
+                        dcNextTime = now + stepMs;
+                        return;
+                    }
+                }
+
+                // Lead mở lại NPC để chọn cửa
+                if (dcStep == DC_L_REOPEN_NPC) {
+                    closeAnyDialog();
+                    sendOpenNpc(dcNpcId);
+                    dcStep = DC_L_ENTER;
+                    dcNextTime = now + npcWait;
+                    return;
+                }
+
+                // Lead chọn cửa (cửa lưu hoặc thử các cửa)
+                if (dcStep == DC_L_ENTER) {
+                    if (detectDialog() == null) { dcNextTime = now + dlgPoll; return; }
+                    String[] menu = readDialogMenuItems();
+                    if (menu == null || menu.length == 0) { dcNextTime = now + dlgPoll; return; }
+
+                    int keyIdx = getSettingInt("dia_cung_key_index", 0);
+                    if (dcSavedTier > 0 && dcSavedTier < menu.length && dcSavedTier != keyIdx) {
+                        dcMapBefore = getCurrentMapId();
+                        tierPicked = dcSavedTier + " " + menu[dcSavedTier];
+                        if (getSubMenuCount(menu, dcSavedTier) > 0) sendSelectMenuWithSub(dcNpcId, dcSavedTier, 0);
+                        else sendSelectMenu(dcNpcId, dcSavedTier);
+                        sendDiaCungProgress("Lead chon cua da luu [" + dcSavedTier + "] " + menu[dcSavedTier]);
+                        dcStep = DC_L_VERIFY;
+                        dcNextTime = now + enterWait;
+                        return;
+                    }
+
+                    if (dcDoorCandidates.isEmpty() || dcDoorTryIndex >= dcDoorCandidates.size()) {
+                        dcDoorCandidates.clear();
+                        for (int i = 0; i < menu.length; i++) {
+                            if (i == keyIdx) continue;
+                            String itemLower = noAccent(menu[i]).toLowerCase();
+                            if (itemLower.contains("thoat") || itemLower.contains("dong") || itemLower.contains("chia")) continue;
+                            dcDoorCandidates.add(i);
+                        }
+                        dcDoorTryIndex = 0;
+                    }
+
+                    if (dcDoorCandidates.isEmpty()) {
+                        finishDiaCung(false, "Lead khong tim thay cua dia cung nao: " + java.util.Arrays.toString(menu));
+                        return;
+                    }
+
+                    int pickIdx = dcDoorCandidates.get(dcDoorTryIndex);
+                    dcMapBefore = getCurrentMapId();
+                    tierPicked = pickIdx + " " + menu[pickIdx];
+                    if (getSubMenuCount(menu, pickIdx) > 0) sendSelectMenuWithSub(dcNpcId, pickIdx, 0);
+                    else sendSelectMenu(dcNpcId, pickIdx);
+                    sendDiaCungProgress("Lead thu cua [" + pickIdx + "] " + menu[pickIdx] + " (" + (dcDoorTryIndex + 1) + "/" + dcDoorCandidates.size() + ")");
+                    dcStep = DC_L_VERIFY;
+                    dcNextTime = now + enterWait;
+                    return;
+                }
+
+                // Lead kiểm tra map đổi
+                if (dcStep == DC_L_VERIFY) {
+                    int nowMap = getCurrentMapId();
+                    if (nowMap != dcMapBefore) {
+                        dcDungeonMap = nowMap;
+                        if (dcDoorCandidates != null && dcDoorCandidates.size() > dcDoorTryIndex) {
+                            dcSavedTier = dcDoorCandidates.get(dcDoorTryIndex);
+                        }
+                        dcFailTries = 0;
+                        dcDoorTryIndex = 0;
+                        dcDoorCandidates.clear();
+                        sendDiaCungProgress("TEAM DA VAO DIA CUNG - Cua [" + tierPicked + "] (map " + dcMapBefore + " -> " + nowMap + ")");
+                        if (getSettingInt("dia_cung_combat", 1) == 1) {
+                            clearNavTarget();
+                            setAutoCombat(true);
+                            autoCombatRequested = true;
+                        }
+                        dcDeadline = diaCungDungeonDeadline(now);
+                        dcStep = DC_IN_DUNGEON;
+                        dcNextTime = now + pollMs;
+                        return;
+                    }
+
+                    closeAnyDialog();
+                    if (!dcDoorCandidates.isEmpty()) {
+                        dcDoorTryIndex++;
+                        if (dcDoorTryIndex < dcDoorCandidates.size()) {
+                            dcStep = DC_L_REOPEN_NPC;
+                            dcNextTime = now + stepMs;
+                            return;
+                        } else {
+                            dcFailTries++;
+                            dcDoorCandidates.clear();
+                            sendDiaCungProgress("Lead thu toan bo cac cua (lan " + dcFailTries + "/3) chua vao duoc");
+                            if (dcFailTries < 3) {
+                                dcStep = DC_L_REOPEN_NPC;
+                                dcNextTime = now + 1500;
+                                return;
+                            } else {
+                                finishDiaCung(false, "Lead thu 3 lan cac cua khong vao duoc (het chia hoac het luot) -> ve bai Farm");
+                                return;
+                            }
+                        }
+                    } else if (dcSavedTier > 0) {
+                        dcFailTries++;
+                        sendDiaCungProgress("Lead vao cua da luu [" + dcSavedTier + "] that bai (lan " + dcFailTries + "/3)");
+                        if (dcFailTries < 3) {
+                            if (dcFailTries == 2) dcSavedTier = 0;
+                            dcStep = DC_L_REOPEN_NPC;
+                            dcNextTime = now + 1500;
+                            return;
+                        } else {
+                            finishDiaCung(false, "Lead thu 3 lan khong vao duoc dia cung (het chia) -> ve bai Farm");
+                            return;
+                        }
+                    } else {
+                        dcFailTries++;
+                        if (dcFailTries < 3) {
+                            dcStep = DC_L_REOPEN_NPC;
+                            dcNextTime = now + 1500;
+                            return;
+                        } else {
+                            finishDiaCung(false, "Lead thu 3 lan khong vao duoc -> ve bai Farm");
+                            return;
+                        }
+                    }
+                }
+
+                // Lead đang trong hầm
+                if (dcStep == DC_IN_DUNGEON) {
+                    int nowMap = getCurrentMapId();
+                    if (nowMap == dcDungeonMap) {
+                        if (getSettingInt("dia_cung_combat", 1) == 1 && !isAutoCombatOn()) {
+                            clearNavTarget();
+                            setAutoCombat(true);
+                        }
+                        dcNextTime = now + pollMs;
+                        return;
+                    }
+
+                    // Ra khỏi hầm -> Lead dẫn nhóm vào lại liên tục!
+                    setAutoCombat(false);
+                    autoCombatRequested = false;
+                    sendDiaCungProgress("Lead da ra khoi dia cung (map " + nowMap + ") -> vao lai luot moi...");
+                    dcFailTries = 0;
+                    dcDoorTryIndex = 0;
+                    dcDoorCandidates.clear();
+                    dcStep = (nowMap == villageMap) ? DC_L_GOTO_NPC : DC_L_GOTO_MAP;
+                    dcNextTime = now + stepMs;
+                    return;
+                }
+            }
+
+            // ══════════════════════════════════════════════════════════════
+            // CHẾ ĐỘ 3: TEAM MEMBER (THÀNH VIÊN)
+            // ══════════════════════════════════════════════════════════════
+            if (dcRole == DC_ROLE_MEMBER) {
+                // Member về làng
+                if (dcStep == DC_M_GOTO_MAP) {
+                    int curMap = getCurrentMapId();
+                    if (curMap != villageMap) {
+                        navigateToMap(villageMap);
+                        dcNextTime = now + mapWait;
+                        return;
+                    }
+                    dcStep = DC_M_WAIT_ZONE;
+                    dcNextTime = now + stepMs;
+                    return;
+                }
+
+                // Chờ Manager báo khu của Lead
+                if (dcStep == DC_M_WAIT_ZONE) {
+                    if (dcWantZone > 0) {
+                        dcStep = DC_M_GOTO_ZONE;
+                        dcNextTime = now + stepMs;
+                        return;
+                    }
+                    dcNextTime = now + 1000;
+                    return;
+                }
+
+                // Member chuyển vào khu của Lead
+                if (dcStep == DC_M_GOTO_ZONE) {
+                    int zone = getCurrentZoneId();
+                    if (zone == dcWantZone) {
+                        dcStep = DC_M_JOIN;
+                        dcNextTime = now + stepMs;
+                        return;
+                    }
+                    long khoa = zoneCooldownLeft(now);
+                    if (khoa > 0) {
+                        dcNextTime = now + khoa + 250;
+                        return;
+                    }
+                    sendChangeZone(dcWantZone);
                     dcNextTime = now + zoneWait;
                     return;
                 }
 
-                sendCreateGroup();
-                dcGroupSentZone = zone;
-                log("Dia cung: chua co nhom -> gui CMD 41 lap nhom (khu " + zone + ")");
-                dcNextTime = now + groupWait;
-                return;
-            }
+                // Member vào nhóm Lead và đứng tại chỗ
+                if (dcStep == DC_M_JOIN) {
+                    Object g = getGroupObj();
+                    if (!hasNoGroup(g)) {
+                        java.util.List<String> names = getGroupMemberNames(g);
+                        if (!names.isEmpty() && names.get(0).equalsIgnoreCase(dcLeaderName)) {
+                            // Đã trong nhóm Lead! Di chuyển tới Lead hoặc NPC
+                            if (dcWantX > 0 && dcWantY > 0) {
+                                int dx = Math.abs(getPlayerX() - dcWantX);
+                                int dy = Math.abs(getPlayerY() - dcWantY);
+                                if (dx > 80 || dy > 80) {
+                                    navigateTo(getCurrentMapId(), dcWantX, dcWantY);
+                                    dcNextTime = now + walkWait;
+                                    return;
+                                }
+                            }
+                            sendDiaCungProgress("Member da vao nhom cua Lead '" + dcLeaderName + "', san sang cho vao ham");
+                            dcStep = DC_M_STANDBY;
+                            dcNextTime = now + pollMs;
+                            return;
+                        } else {
+                            sendLeaveGroup();
+                            dcNextTime = now + groupWait;
+                            return;
+                        }
+                    }
 
-            // Bước 1: về đúng map có NPC (mặc định 68 = Làng Cỏ)
-            if (dcStep == DC_GOTO_MAP) {
-                // Không khai dia_cung_map thì dùng luôn map của config "village" (nút Về làng),
-                // tránh ghi trùng map ở hai chỗ rồi lệch nhau về sau.
-                int wantMap = getSettingInt("dia_cung_map", 0);
-                if (wantMap <= 0) {
-                    loadAnchorConfig();
-                    if (villageConfig != null) wantMap = villageConfig[0];
-                }
-                int curMap = getCurrentMapId();
-                if (wantMap > 0 && curMap != wantMap) {
-                    navigateToMap(wantMap);
-                    log("Dia cung: dang o map " + curMap + " -> di toi map " + wantMap);
-                    dcNextTime = now + mapWait;   // đang đi xuyên map, lát kiểm lại
+                    // Chưa trong nhóm -> gửi xin vào nhóm Lead
+                    if (dcLeaderName != null && !dcLeaderName.isEmpty()) {
+                        sendJoinByName(dcLeaderName);
+                        log("Dia cung (Member): gui CMD 39 xin vao nhom cua '" + dcLeaderName + "'");
+                    }
+                    dcNextTime = now + groupWait;
                     return;
                 }
-                dcStep = DC_GROUP;
-                dcNextTime = now + stepMs;
-                return;
-            }
 
-            // Bước 3: tìm NPC theo tên rồi đi tới. Không thấy thì lui về toạ độ trong config
-            // và thử lại — vì NPC chỉ nằm trong z.F khi đã ở đúng map/khu và dữ liệu đã về.
-            if (dcStep == DC_FIND_NPC) {
-                String npcName = getSetting("dia_cung_npc", "Raikage");
-                int curMap = getCurrentMapId();
-                int[] npc = findNpc(npcName, getSettingInt("dia_cung_npc_id", 59));
-
-                if (npc == null) {
-                    int[] cfg = npcConfig.get("npc_dia_cung_" + curMap);
-                    if (cfg != null && dcWalkTries < getSettingInt("dia_cung_walk_tries", 3)) {
-                        dcWalkTries++;
-                        navigateTo(curMap, cfg[1], cfg[2]);
-                        log("Dia cung: chua thay NPC '" + npcName + "' -> di toi toa do config ("
-                                + cfg[1] + "," + cfg[2] + ") lan " + dcWalkTries);
-                        dcNextTime = now + walkWait;
+                // Chờ Lead mở cửa địa cung (khi Lead vào hầm, game server tự kéo Member vào)
+                if (dcStep == DC_M_STANDBY) {
+                    int nowMap = getCurrentMapId();
+                    if (nowMap != villageMap) {
+                        // Đã vào hầm!
+                        dcDungeonMap = nowMap;
+                        sendDiaCungProgress("Member da duoc keo vao dia cung (map " + nowMap + ")");
+                        if (getSettingInt("dia_cung_combat", 1) == 1) {
+                            clearNavTarget();
+                            setAutoCombat(true);
+                            autoCombatRequested = true;
+                        }
+                        dcDeadline = diaCungDungeonDeadline(now);
+                        dcStep = DC_IN_DUNGEON;
+                        dcNextTime = now + pollMs;
                         return;
                     }
-                    dumpAllNpcsOnMap();
-                    finishDiaCung(false, "khong thay NPC '" + npcName + "' tren map " + curMap
-                            + " - xem log client de biet ten NPC that");
+                    dcNextTime = now + 1500;
                     return;
                 }
 
-                dcNpcId = npc[0];
-                int dx = Math.abs(getPlayerX() - npc[1]);
-                int dy = Math.abs(getPlayerY() - npc[2]);
-                int range = getSettingInt("dia_cung_npc_range", 60);
-                if (dx > range || dy > range) {
-                    navigateTo(curMap, npc[1], npc[2]);
-                    dcNextTime = now + walkWait;   // đang đi, lát nữa kiểm lại khoảng cách
-                    return;
-                }
-                dcStep = DC_OPEN_NPC;
-                dcNextTime = now + stepMs;
-                return;
-            }
-
-            // Bước 4: mở NPC. Đóng dialog còn sót trước, nếu không bước sau sẽ đọc phải
-            // menu của dialog cũ (dễ xảy ra khi chạy lại lần hai trong cùng phiên).
-            if (dcStep == DC_OPEN_NPC) {
-                closeAnyDialog();
-                sendOpenNpc(dcNpcId);
-                log("Dia cung: gui CMD 54 mo NPC id=" + dcNpcId);
-                // Hôm nay đã nhận chìa rồi thì bỏ qua bước nhận, vào thẳng bước chọn hầm
-                dcStep = dcSkipKey ? DC_ENTER : DC_GET_KEY;
-                if (dcSkipKey) log("Dia cung: hom nay da nhan chia -> bo qua, vao thang chon ham");
-                dcNextTime = now + npcWait;
-                return;
-            }
-
-            // Bước 5: chờ dialog, đọc menu, chọn mục nhận chìa
-            if (dcStep == DC_GET_KEY) {
-                if (detectDialog() == null) { dcNextTime = now + dlgPoll; return; }
-                String[] menu = readDialogMenuItems();
-                if (menu == null || menu.length == 0) { dcNextTime = now + dlgPoll; return; }
-
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < menu.length; i++) sb.append("  [").append(i).append("] ").append(menu[i]).append("\n");
-                log("Dia cung: menu NPC:\n" + sb);
-
-                // CHỌN THEO INDEX là chính. Thứ tự menu NPC 59 đã đối chiếu khớp giữa bản mẫu
-                // và server thật, trong khi so text từng gãy vì dấu thanh ("khoá" vs "khóa").
-                // Keyword chỉ còn là lưới an toàn khi index cấu hình nằm ngoài phạm vi menu.
-                int idx = getSettingInt("dia_cung_key_index", 0);
-                if (idx < 0 || idx >= menu.length) {
-                    String kw = getSetting("dia_cung_key_menu", "chìa");
-                    int byKw = findMenuIndexByKeyword(menu, kw);
-                    if (byKw < 0) {
-                        finishDiaCung(false, "index " + idx + " ngoai pham vi (menu co " + menu.length
-                                + " muc) va khong thay keyword '" + kw + "' | menu: "
-                                + java.util.Arrays.toString(menu));
+                // Member trong hầm
+                if (dcStep == DC_IN_DUNGEON) {
+                    int nowMap = getCurrentMapId();
+                    if (nowMap == dcDungeonMap) {
+                        if (getSettingInt("dia_cung_combat", 1) == 1 && !isAutoCombatOn()) {
+                            clearNavTarget();
+                            setAutoCombat(true);
+                        }
+                        dcNextTime = now + pollMs;
                         return;
                     }
-                    log("Dia cung: index " + idx + " ngoai pham vi -> dung keyword, ra index " + byKw);
-                    idx = byKw;
-                }
-                if (getSubMenuCount(menu, idx) > 0) sendSelectMenuWithSub(dcNpcId, idx, 0);
-                else sendSelectMenu(dcNpcId, idx);
 
-                // Báo riêng để Manager đóng dấu "đã nhận chìa hôm nay". Tách khỏi kết quả cuối
-                // vì bước vào hầm phía sau có thể hỏng mà chìa thì đã nhận rồi.
-                pushDiaCung("dia_cung_key_claimed", true, "da bam nhan chia: [" + idx + "] " + menu[idx]);
-                sendDiaCungProgress("da bam nhan chia [" + idx + "] " + menu[idx]);
-
-                dcStep = DC_REOPEN_NPC;
-                dcNextTime = now + npcWait;
-                return;
-            }
-
-            // Bước 6: mở lại NPC để chọn hầm. Đóng dialog còn sót trước — nếu server đẩy
-            // thông báo ("đã nhận rồi", "túi đầy"...) thì dialog cũ vẫn nằm trên stack và
-            // bước sau sẽ đọc nhầm menu của nó.
-            if (dcStep == DC_REOPEN_NPC) {
-                closeAnyDialog();
-                sendOpenNpc(dcNpcId);
-                log("Dia cung: mo lai NPC de chon ham");
-                dcStep = DC_ENTER;
-                dcNextTime = now + npcWait;
-                return;
-            }
-
-            // Bước 7: chọn hầm theo tier rồi ghi lại map hiện tại làm mốc so sánh
-            if (dcStep == DC_ENTER) {
-                if (detectDialog() == null) { dcNextTime = now + dlgPoll; return; }
-                String[] menu = readDialogMenuItems();
-                if (menu == null || menu.length == 0) { dcNextTime = now + dlgPoll; return; }
-
-                // Menu NPC 59: index 0 = nhận chìa, 1..4 = sơ/trung/cao/thượng cấp
-                // ⇒ index của hầm TRÙNG số tier, không cần bảng ánh xạ riêng.
-                int tier = (dcTier > 0) ? dcTier : getSettingInt("dia_cung_tier", 1);
-                if (tier < 1 || tier >= menu.length) {
-                    finishDiaCung(false, "tier " + tier + " khong hop le (menu co " + menu.length
-                            + " muc) | menu: " + java.util.Arrays.toString(menu));
-                    return;
-                }
-
-                // In nguyên menu trước khi bấm. Bước này chọn THUẦN theo index, không đối chiếu
-                // chữ — nên nếu server đổi thứ tự menu thì phải nhìn log mới truy ra được.
-                // (Menu NPC 32 bên Cấm thuật đã lệch bản mẫu đúng kiểu này.)
-                log("Dia cung: menu chon ham: " + java.util.Arrays.toString(menu));
-                sendDiaCungProgress("menu chon ham: " + java.util.Arrays.toString(menu));
-
-                // Chặn cú bấm tệ nhất: trùng vào mục NHẬN CHÌA. Nếu thứ tự menu xê dịch mà cứ
-                // bấm theo index thì có thể bấm nhầm vào đó, vừa phí thao tác vừa đánh dấu sai.
-                int keyIdx = getSettingInt("dia_cung_key_index", 0);
-                if (tier == keyIdx) {
-                    finishDiaCung(false, "tier " + tier + " trung voi muc nhan chia (index "
-                            + keyIdx + ") -> khong bam | menu: " + java.util.Arrays.toString(menu));
-                    return;
-                }
-
-                dcMapBefore = getCurrentMapId();
-                tierPicked = tier + " " + menu[tier];
-                if (getSubMenuCount(menu, tier) > 0) sendSelectMenuWithSub(dcNpcId, tier, 0);
-                else sendSelectMenu(dcNpcId, tier);
-                sendDiaCungProgress("chon ham [" + tier + "] " + menu[tier] + " (dang o map " + dcMapBefore + ")");
-
-                dcStep = DC_VERIFY;
-                dcNextTime = now + enterWait;
-                return;
-            }
-
-            // Bước 8: xác nhận đã vào hầm — bằng chứng duy nhất đáng tin là MAP ĐỔI.
-            // Nó bao trùm mọi thất bại phía trên: chưa có nhóm, chưa có chìa, hết lượt hôm nay.
-            if (dcStep == DC_VERIFY) {
-                int nowMap = getCurrentMapId();
-                if (nowMap != dcMapBefore) {
-                    dcDungeonMap = nowMap;
-                    sendDiaCungProgress("da vao dia cung - map " + dcMapBefore + " -> " + nowMap);
-                    // Không bật đánh thì nhân vật đứng không trong hầm, hầm chẳng bao giờ "kết thúc"
-                    if (getSettingInt("dia_cung_combat", 1) == 1) {
-                        // BẮT BUỘC xoá đích di chuyển trước. Vừa nãy đã gọi navigateToMap(lang)
-                        // và navigateTo(NPC) nên z.ap còn bật và fe0.as vẫn trỏ về map làng —
-                        // để nguyên thì nhân vật lo đi về làng chứ không đánh. tickAfkFarm cũng
-                        // gọi clearNavTarget() ngay trước khi bật đánh, đúng lý do này.
-                        clearNavTarget();
-                        setAutoCombat(true);
-                        autoCombatRequested = true;
-                        log("Dia cung: xoa dich di chuyen + bat auto combat trong ham");
-                    }
-                    dcDeadline = diaCungDungeonDeadline(now);
-                    dcStep = DC_IN_DUNGEON;
-                    dcNextTime = now + pollMs;
-                    return;
-                }
-                if (++dcVerifyWaits > getSettingInt("dia_cung_verify_tries", 6)) {
-                    // TỰ CHỮA: lượt này bỏ qua bước nhận chìa vì Manager bảo "hôm nay bấm rồi",
-                    // mà bấm vào hầm lại không vào được ⇒ dấu ngày đó không đáng tin (nó ghi
-                    // "đã BẤM", không phải "server đã CẤP"). Xoá dấu để lượt sau nhận lại chìa,
-                    // thay vì lặp lại đúng thất bại này mọi lần chạy trong ngày.
-                    if (dcSkipKey) {
-                        pushDiaCung("dia_cung_key_reset", true,
-                                "bo qua nhan chia nhung khong vao duoc ham -> xoa dau ngay");
-                    }
-                    // Đọc NGUYÊN VĂN thông báo server đẩy lên thay vì đoán lý do. Trước đây câu
-                    // "nhieu kha nang chua co chia hoac het luot" chỉ là suy đoán của tool, không
-                    // dựa trên gì cả — mà server thì luôn nói rõ vì sao không vào được.
-                    String why = readAnyDialogText();
-                    closeAnyDialog();
-
-                    // GỌI ĐÚNG TÊN TRẠNG THÁI. Bấm đúng mục, server nhận lệnh, map không đổi, và
-                    // server KHÔNG nói gì (chỉ còn câu chào của NPC) — đo thật 05/08 trên nick đã
-                    // đi hầm từ trước. Đây là cách server từ chối lượt thứ hai trong ngày: im lặng.
-                    // Ghi thành "het luot" chứ không phải "that bai": tool không làm sai bước nào,
-                    // và đọc log sáng hôm sau mà thấy ❌ là đi tìm lỗi không tồn tại.
-                    //
-                    // Vẫn để ok=false vì rốt cuộc KHÔNG vào được hầm — chỉ đổi cách gọi tên, không
-                    // đổi kết luận. Server có nói lý do thật thì in nguyên văn, khỏi đoán.
-                    boolean serverImLang = (why == null || why.trim().isEmpty()
-                                            || noAccent(why).toLowerCase().contains("xin chao"));
-                    finishDiaCung(false, (serverImLang
-                                ? "khong vao duoc ham - nhieu kha nang DA DI HAM HOM NAY"
-                                  + " (bam dung muc, server khong bao loi gi)"
-                                : "khong vao duoc ham")
-                            + " [muc " + tierPicked + ", van o map " + dcMapBefore + "]"
-                            + (dcSkipKey ? " (lan nay da bo qua buoc nhan chia - da xoa dau ngay)" : "")
-                            + (serverImLang ? "" : " | Server bao: " + why));
-                    return;
-                }
-                dcNextTime = now + getSettingInt("dia_cung_verify_ms", 1000);
-                return;
-            }
-
-            // Bước 9: đang trong hầm. Rời khỏi map hầm nghĩa là hoạt động đã kết thúc
-            // (hết giờ hoặc hoàn thành) — lúc đó bàn giao cho AFK farm, không để đứng ở làng.
-            if (dcStep == DC_IN_DUNGEON) {
-                int nowMap = getCurrentMapId();
-                if (nowMap == dcDungeonMap) {
-                    // Vẫn trong hầm. Bật lại đánh nếu bị tắt giữa chừng (chết/hồi sinh, đổi
-                    // trạng thái map...) — tickAfkFarm cũng tự bật lại theo chu kỳ như vậy.
-                    if (getSettingInt("dia_cung_combat", 1) == 1 && !isAutoCombatOn()) {
-                        clearNavTarget();
-                        setAutoCombat(true);
-                        log("Dia cung: auto combat bi tat -> bat lai");
-                    }
-                    dcNextTime = now + pollMs;
-                    return;
-                }
-
-                setAutoCombat(false);
-                autoCombatRequested = false;
-
-                int homeMap = getSettingInt("dia_cung_map", 0);
-                if (homeMap <= 0) {
-                    loadAnchorConfig();
-                    if (villageConfig != null) homeMap = villageConfig[0];
-                }
-                String where = (nowMap == homeMap)
-                        ? ("da ve lang (map " + nowMap + ")")
-                        : ("da ra khoi ham, dang o map " + nowMap);
-
-                if (afkMapId > 0 && getSettingInt("dia_cung_after_afk", 1) == 1) {
-                    // Bàn giao cho AFK_FARM sẵn có: nó tự đi tới map treo, đổi khu rồi bật đánh.
-                    // Reset 2 cờ để nó chịu đổi khu và bật lại combat cho lượt mới.
-                    afkZoneChanged = false;
+                    // Ra khỏi hầm -> đứng chờ lượt tiếp theo
+                    setAutoCombat(false);
                     autoCombatRequested = false;
-                    setEnabled(true);
-                    setState(TaskState.AFK_FARM);
-                    finishDiaCung(true, where + " -> chuyen sang treo map " + afkMapId + " khu " + afkZone);
-                } else {
-                    finishDiaCung(true, where + " (chua cau hinh map treo nen dung yen)");
+                    sendDiaCungProgress("Member ra khoi dia cung -> cho Lead mo luot tiep...");
+                    dcStep = DC_M_STANDBY;
+                    dcNextTime = now + pollMs;
+                    return;
                 }
-                return;
             }
         } catch (Exception e) {
             finishDiaCung(false, "loi: " + e.getMessage());
@@ -3109,7 +3747,7 @@ public class TaskManager {
             }
             if (dcStep > 0) {
                 what.append("Dia cung(buoc ").append(dcStep).append(") ");
-                dcStep = 0;
+                resetDiaCung();
             }
             if (agtStep > 0) {
                 what.append("AGT(buoc ").append(agtStep).append(") ");
@@ -3152,16 +3790,8 @@ public class TaskManager {
 
     private void stopCurrentActivity() {
         try {
-            // DỪNG CẢ HAI MÁY TRẠNG THÁI, không chỉ hạ cờ enabled.
-            //
-            // tick() gọi tickDiaCung() và tickCamThuat() TRƯỚC cổng `enabled` (cố ý, để chạy được
-            // khi Auto NV tắt). Nên setEnabled(false) KHÔNG dừng được chúng. Trước đây:
-            //   - bấm Cấm thuật mà dcStep vẫn > 0  ⇒ Địa cung tiếp tục chạy song song
-            //   - bấm Địa cung  mà ctStep vẫn > 0  ⇒ Cấm thuật tiếp tục chạy song song
-            // Hai máy trạng thái cùng phát navigateTo lên MỘT nhân vật, tranh nhau kéo đi hai
-            // hướng. Đây là lời giải cho "nhân vật tự chạy tới một toạ độ không có trong bước
-            // nào của Cấm thuật": lệnh đó do máy trạng thái kia phát.
-            dcStep = 0;
+            // DỪNG CÁC MÁY TRẠNG THÁI, không chỉ hạ cờ enabled.
+            resetDiaCung();
             resetCamThuat();
             resetSonCap();
             resetAgt();

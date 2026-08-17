@@ -26,7 +26,7 @@ namespace Manager
     public static class UpdateManager
     {
         // ── Phiên bản hiện tại của Tool ──────────────────────────────────────
-        public const string CURRENT_VERSION = "1.0.1";
+        public const string CURRENT_VERSION = "1.0.2";
         public const string GITHUB_REPO = "skienn81/langlatoolgame";
 
         private static readonly HttpClient _httpClient = new HttpClient();
@@ -215,84 +215,125 @@ namespace Manager
         }
 
         /// <summary>
-        /// Tạo file updater.bat và kích hoạt tiến trình ghi đè an toàn, sau đó thoát ứng dụng.
+        /// Tạo file updater.ps1 và kích hoạt tiến trình ghi đè an toàn, sau đó thoát ứng dụng.
         /// </summary>
         public static void ApplyUpdateAndRestart(string zipPath)
         {
             string rootDir = GetToolRootDir();
-            string updaterBatPath = Path.Combine(rootDir, "temp_update", "updater.bat");
+            string tempDir = Path.Combine(rootDir, "temp_update");
+            if (!Directory.Exists(tempDir))
+            {
+                Directory.CreateDirectory(tempDir);
+            }
+
+            string updaterPs1Path = Path.Combine(tempDir, "updater.ps1");
             int currentPid = Process.GetCurrentProcess().Id;
 
-            // Kịch bản Updater:
-            // 1. Chờ Manager.exe có PID hiện tại thoát hẳn (mở khóa file)
-            // 2. Dùng PowerShell giải nén update.zip ghi đè vào rootDir
-            //    - Bảo vệ tuyệt đối: KHÔNG ghi đè file config.json (chứa nick/pass của khách)
-            // 3. Khởi động lại Manager.exe
-            // 4. Tự dọn dẹp thư mục tạm
-            string scriptContent = $@"@echo off
-chcp 65001 >nul
-setlocal enabledelayedexpansion
-
-echo ======================================================
-echo   DANG CAP NHAT LANG LA AUTO BOT...
-echo   Vui long cho trong giay lat...
-echo ======================================================
-
-set ""TARGET_DIR={rootDir}""
-set ""ZIP_PATH={zipPath}""
-set ""WAIT_PID={currentPid}""
-
-:: 1. Cho tien trinh Manager cu dong han
-if not ""!WAIT_PID!""=="""" (
-    :wait_loop
-    tasklist /fi ""PID eq !WAIT_PID!"" 2>nul | find ""!WAIT_PID!"" >nul
-    if not errorlevel 1 (
-        timeout /t 1 /nobreak >nul
-        goto wait_loop
-    )
-)
-timeout /t 1 /nobreak >nul
-
-:: 2. Giai nen ghi de file moi (Bao ve config.json)
-powershell -NoProfile -ExecutionPolicy Bypass -Command ""try {{ Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = [System.IO.Compression.ZipFile]::OpenRead('$ZIP_PATH'); foreach ($e in $zip.Entries) {{ if ($e.FullName.EndsWith('/') -or $e.FullName.EndsWith('\\')) {{ continue; }}; $dest = [System.IO.Path]::Combine('$TARGET_DIR', $e.FullName); $fName = [System.IO.Path]::GetFileName($e.FullName); if ($fName -ieq 'config.json' -and [System.IO.File]::Exists($dest)) {{ continue; }}; $dir = [System.IO.Path]::GetDirectoryName($dest); if (-not [System.IO.Directory]::Exists($dir)) {{ [System.IO.Directory]::CreateDirectory($dir) | Out-Null; }}; [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, $dest, $true); }}; $zip.Dispose(); exit 0; }} catch {{ Write-Error $_.Exception.Message; exit 1; }}""
-
-if %ERRORLEVEL% NEQ 0 (
-    echo.
-    echo [LOI] Khong the giai nen ban cap nhat.
-    pause
-    exit /b 1
+            string ps1Content = @"param (
+    [string]$TargetDir,
+    [string]$ZipPath,
+    [int]$WaitPid
 )
 
-echo Cap nhat thanh cong! Dang khoi dong lai Manager...
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$Host.UI.RawUI.WindowTitle = 'Đang Cập Nhật Làng Lá Auto Bot...'
 
-:: 3. Tim va mo lai Manager.exe
-if exist ""!TARGET_DIR!\Manager.exe"" (
-    start """" ""!TARGET_DIR!\Manager.exe""
-) else if exist ""!TARGET_DIR!\Manager\bin\Release\net8.0-windows\Manager.exe"" (
-    start """" ""!TARGET_DIR!\Manager\bin\Release\net8.0-windows\Manager.exe""
-) else (
-    for /r ""!TARGET_DIR!"" %%f in (Manager.exe) do (
-        start """" ""%%f""
-        goto launched
-    )
-)
-:launched
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host '      ĐANG CẬP NHẬT LÀNG LÁ AUTO BOT                  ' -ForegroundColor Cyan
+Write-Host '======================================================' -ForegroundColor Cyan
+Write-Host ''
 
-:: 4. Xoa thu muc tam sau khi hoan tat
-timeout /t 2 /nobreak >nul
-if exist ""!TARGET_DIR!\temp_update"" (
-    rd /s /q ""!TARGET_DIR!\temp_update"" 2>nul
-)
+# 1. Đợi tiến trình Manager cũ tắt hẳn để mở khóa file
+if ($WaitPid -gt 0) {
+    Write-Host ""[1/4] Đang chờ đóng tiến trình cũ (PID $WaitPid)..."" -ForegroundColor Yellow
+    try {
+        $proc = Get-Process -Id $WaitPid -ErrorAction SilentlyContinue
+        if ($proc) {
+            $proc.WaitForExit(10000)
+        }
+    } catch {}
+}
+Start-Sleep -Milliseconds 800
+
+# 2. Giải nén và ghi đè file
+Write-Host ""[2/4] Đang giải nén và cập nhật các file mới..."" -ForegroundColor Yellow
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+if (-not (Test-Path $ZipPath)) {
+    Write-Host ""[LỖI] Không tìm thấy file zip tại: $ZipPath"" -ForegroundColor Red
+    Start-Sleep -Seconds 5
+    exit 1
+}
+
+try {
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    $total = $zip.Entries.Count
+
+    foreach ($entry in $zip.Entries) {
+        if ($entry.FullName.EndsWith('/') -or $entry.FullName.EndsWith('\')) {
+            continue
+        }
+
+        $destPath = [System.IO.Path]::Combine($TargetDir, $entry.FullName)
+        $fileName = [System.IO.Path]::GetFileName($entry.FullName)
+
+        # BẢO VỆ DỮ LIỆU CÁ NHÂN: Không ghi đè config.json nếu đã tồn tại
+        if ($fileName -ieq 'config.json' -and (Test-Path $destPath)) {
+            continue
+        }
+
+        $destDir = [System.IO.Path]::GetDirectoryName($destPath)
+        if (-not (Test-Path $destDir)) {
+            [System.IO.Directory]::CreateDirectory($destDir) | Out-Null
+        }
+
+        # Ghi đè file
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destPath, $true)
+    }
+    $zip.Dispose()
+    Write-Host ""[3/4] Cập nhật file hoàn tất!"" -ForegroundColor Green
+} catch {
+    Write-Host ""[LỖI GIẢI NÉN] $($_.Exception.Message)"" -ForegroundColor Red
+    Write-Host ""Vui lòng đóng các cửa sổ game hoặc ứng dụng đang mở rồi thử lại."" -ForegroundColor Yellow
+    Write-Host ""Nhấn phím bất kỳ để thoát...""
+    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+    exit 1
+}
+
+# 3. Khởi động lại Manager.exe
+Write-Host ""[4/4] Đang khởi động lại Manager.exe..."" -ForegroundColor Cyan
+$managerExe = [System.IO.Path]::Combine($TargetDir, 'Manager.exe')
+if (-not (Test-Path $managerExe)) {
+    $found = Get-ChildItem -Path $TargetDir -Filter 'Manager.exe' -Recurse | Select-Object -First 1
+    if ($found) { $managerExe = $found.FullName }
+}
+
+if (Test-Path $managerExe) {
+    Start-Process -FilePath $managerExe -WorkingDirectory $TargetDir
+} else {
+    Write-Host ""[CẢNH BÁO] Không tìm thấy file Manager.exe để mở lại."" -ForegroundColor Yellow
+    Start-Sleep -Seconds 3
+}
+
+# 4. Dọn dẹp thư mục tạm
+Start-Sleep -Seconds 1
+$tempDir = [System.IO.Path]::GetDirectoryName($ZipPath)
+if (Test-Path $tempDir) {
+    try {
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {}
+}
 
 exit 0
 ";
 
-            File.WriteAllText(updaterBatPath, scriptContent, new UTF8Encoding(false));
+            File.WriteAllText(updaterPs1Path, ps1Content, new UTF8Encoding(false));
 
-            // Kích hoạt updater.bat chạy độc lập
+            // Kích hoạt updater.ps1 chạy độc lập
             var psi = new ProcessStartInfo
             {
-                FileName = updaterBatPath,
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{updaterPs1Path}\" -TargetDir \"{rootDir}\" -ZipPath \"{zipPath}\" -WaitPid {currentPid}",
                 UseShellExecute = true,
                 CreateNoWindow = false,
                 WindowStyle = ProcessWindowStyle.Normal,

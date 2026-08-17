@@ -2803,6 +2803,14 @@ namespace Manager
         private readonly Dictionary<string, GroupSetup> _ctPlanned =
             new Dictionary<string, GroupSetup>(StringComparer.OrdinalIgnoreCase);
 
+        // Đội hình Địa cung đang chạy theo team
+        private readonly Dictionary<string, GroupSetup> _dcActive =
+            new Dictionary<string, GroupSetup>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _dcLastRelay =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, GroupSetup> _dcPlanned =
+            new Dictionary<string, GroupSetup>(StringComparer.OrdinalIgnoreCase);
+
         // tên nhóm -> dòng tổng kết gần nhất, để chỉ ghi log khi đội hình thực sự đổi.
         private readonly Dictionary<string, string> _ctLastRoster =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -3099,9 +3107,11 @@ namespace Manager
             Dictionary<string, List<string>> teams = null;   // chỉ dựng khi thật sự có khai "team ="
             int stt = 0;
 
-            // Xác định xem có ưu tiên dùng khối [team:...] cho hoạt động theo nhóm (camthuat, soncap) không
+            // Xác định xem có ưu tiên dùng khối [team:...] cho hoạt động theo nhóm (camthuat, soncap, diacung) không
             bool isTeamActivity = string.Equals(loai, "camthuat", StringComparison.OrdinalIgnoreCase)
                                || string.Equals(loai, "soncap", StringComparison.OrdinalIgnoreCase)
+                               || string.Equals(loai, "diacung", StringComparison.OrdinalIgnoreCase)
+                               || string.Equals(loai, "dc", StringComparison.OrdinalIgnoreCase)
                                || string.Equals(loai, "team", StringComparison.OrdinalIgnoreCase);
 
             var matchingBlocks = new List<DoiHinhKhoi>();
@@ -4265,6 +4275,69 @@ namespace Manager
         }
 
         /// <summary>
+        /// Trưởng nhóm Địa cung báo map/khu -> phát cho member của nhóm đó.
+        /// </summary>
+        public void RelayDiaCungZone(string leaderUsername, int mapId, int zoneId, string leaderChar,
+                                     int leaderX = -1, int leaderY = -1)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() =>
+                    RelayDiaCungZone(leaderUsername, mapId, zoneId, leaderChar, leaderX, leaderY)));
+                return;
+            }
+
+            var g = _dcActive.Values.FirstOrDefault(x =>
+                string.Equals(x.Leader, leaderUsername, StringComparison.OrdinalIgnoreCase));
+            if (g == null)
+            {
+                g = _dcPlanned.Values.FirstOrDefault(x =>
+                    string.Equals(x.Leader, leaderUsername, StringComparison.OrdinalIgnoreCase));
+                if (g == null) return;
+            }
+
+            if (string.IsNullOrWhiteSpace(leaderChar)) leaderChar = GetCharName(leaderUsername);
+
+            foreach (var m in g.Members)
+            {
+                FindSession(m)?.SendRawJson(
+                    $"{{\"command\":\"dia_cung_goto\",\"map\":{mapId},\"zone\":{zoneId}," +
+                    $"\"x\":{leaderX},\"y\":{leaderY}," +
+                    $"\"leader\":\"{EscapeJson(leaderChar)}\"}}\n");
+            }
+
+            string stamp = $"{mapId}/{zoneId}";
+            if (!_dcLastRelay.TryGetValue(g.Name, out var prev) || prev != stamp)
+            {
+                _dcLastRelay[g.Name] = stamp;
+                Log($"🏯 Nhóm Địa cung '{g.Name}': điểm tập kết map {mapId} khu {zoneId} → đã báo {g.Members.Count} member");
+            }
+        }
+
+        public void RelayDiaCungZoneFull(string memberUsername, string detail, int wantZone)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => RelayDiaCungZoneFull(memberUsername, detail, wantZone)));
+                return;
+            }
+
+            var g = _dcActive.Values.FirstOrDefault(x =>
+                x.Members.Any(m => string.Equals(m, memberUsername, StringComparison.OrdinalIgnoreCase)));
+            if (g == null)
+            {
+                g = _dcPlanned.Values.FirstOrDefault(x =>
+                    x.Members.Any(m => string.Equals(m, memberUsername, StringComparison.OrdinalIgnoreCase)));
+            }
+            if (g == null) return;
+
+            FindSession(g.Leader)?.SendRawJson(
+                $"{{\"command\":\"dia_cung_zone_full_notify\",\"member\":\"{EscapeJson(memberUsername)}\"," +
+                $"\"want_zone\":{wantZone}}}\n");
+            Log($"🏯 Nhóm '{g.Name}': member '{memberUsername}' báo khu {wantZone} đầy người -> đã báo Lead");
+        }
+
+        /// <summary>
         /// Trưởng nhóm báo đội hình thật (danh sách server trả về). Gộp với danh sách khai
         /// trong doi_hinh.cfg để ra bản tổng kết: nhóm nào ĐỦ, nhóm nào THIẾU và thiếu vì đâu.
         /// Có hai kiểu thiếu, phải tách bạch vì cách xử lý khác nhau:
@@ -4743,6 +4816,24 @@ namespace Manager
             Log($"🔑↩️ [{username}] {reason} — đã xoá dấu nhận chìa, lần sau sẽ nhận lại");
         }
 
+        /// <summary>
+        /// Lưu cửa Địa cung hợp lệ mà nick vừa vào thành công.
+        /// </summary>
+        public void SaveDiaCungTier(string username, int tier)
+        {
+            if (string.IsNullOrWhiteSpace(username) || tier <= 0) return;
+            if (InvokeRequired) { BeginInvoke(new Action(() => SaveDiaCungTier(username, tier))); return; }
+
+            var acc = FindAccount(username);
+            if (acc == null) return;
+            if (acc.DiaCungTier != tier)
+            {
+                acc.DiaCungTier = tier;
+                SaveConfig();
+                Log($"🏯 [{username}] đã lưu cửa Địa cung [{tier}]");
+            }
+        }
+
         /// <summary>Cập nhật cột "Map/Khu" trên lưới theo cấu hình hiện tại.</summary>
         private void RefreshAfkColumn()
         {
@@ -5051,6 +5142,46 @@ namespace Manager
                                 bool ok = data.TryGetValue("ok", out var okD)
                                           && bool.TryParse(okD.ToString(), out bool b) && b;
                                 _mainForm.RelayDiaCungEnd(user, ok, detail);
+                                continue;
+                            }
+
+                            // ── dia_cung_zone: Lead địa cung báo map/khu ──
+                            if (data.TryGetValue("type", out var typeDcZ) && typeDcZ.ToString() == "dia_cung_zone")
+                            {
+                                string user = data.TryGetValue("username", out var uDcZ) ? uDcZ.ToString() : Username;
+                                int mapId = data.TryGetValue("map", out var mDcZ)
+                                            && int.TryParse(mDcZ.ToString(), out int mv) ? mv : 0;
+                                int zoneId = data.TryGetValue("zone", out var zDcZ)
+                                             && int.TryParse(zDcZ.ToString(), out int zv) ? zv : -1;
+                                string leaderChar = data.TryGetValue("extra", out var eDcZ) ? eDcZ.ToString() : "";
+                                int lx = data.TryGetValue("x", out var xDcZ)
+                                         && int.TryParse(xDcZ.ToString(), out int lxv) ? lxv : -1;
+                                int ly = data.TryGetValue("y", out var yDcZ)
+                                         && int.TryParse(yDcZ.ToString(), out int lyv) ? lyv : -1;
+                                _mainForm.RelayDiaCungZone(user, mapId, zoneId, leaderChar, lx, ly);
+                                continue;
+                            }
+
+                            // ── dia_cung_zone_full: Member báo khu của Lead đầy người ──
+                            if (data.TryGetValue("type", out var typeDcZF) && typeDcZF.ToString() == "dia_cung_zone_full")
+                            {
+                                string user = data.TryGetValue("username", out var uDcZF) ? uDcZF.ToString() : Username;
+                                string detail = data.TryGetValue("detail", out var dDcZF) ? dDcZF.ToString() : "";
+                                int wz = data.TryGetValue("want_zone", out var wDcZF)
+                                         && int.TryParse(wDcZF.ToString(), out int wvDcZF) ? wvDcZF : -1;
+                                _mainForm.RelayDiaCungZoneFull(user, detail, wz);
+                                continue;
+                            }
+
+                            // ── dia_cung_tier_saved: lưu cửa địa cung hợp lệ vừa vào thành công ──
+                            if (data.TryGetValue("type", out var typeDcT) && typeDcT.ToString() == "dia_cung_tier_saved")
+                            {
+                                string user = data.TryGetValue("username", out var uDcT) ? uDcT.ToString() : Username;
+                                string tierStr = data.TryGetValue("detail", out var dDcT) ? dDcT.ToString() : "";
+                                if (int.TryParse(tierStr, out int savedTier) && savedTier > 0)
+                                {
+                                    _mainForm.SaveDiaCungTier(user, savedTier);
+                                }
                                 continue;
                             }
 

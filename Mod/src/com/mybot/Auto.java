@@ -1335,20 +1335,83 @@ public class Auto {
                 System.out.println("[MyBot] get_pos error: " + e.getMessage());
             }
         } else if (line.contains("\"command\":\"dia_cung_run\"")) {
-            // Địa cung — chạy trọn hoạt động: lập nhóm (1 người) -> tới NPC -> nhận chìa.
-            // Bất đồng bộ vì mọi bước đều phải chờ server; tiến trình + kết quả đẩy về Manager.
+            // Địa cung — chạy trọn hoạt động (Solo)
             try {
                 TaskManager tm = TaskManager.getInstance();
                 if (!tm.ensureReflection()) {
                     System.out.println("[MyBot] dia_cung_run: reflection chua san sang");
                     return;
                 }
-                // tier: 0 = lấy từ config; skipKey: Manager báo hôm nay đã nhận chìa rồi
                 int tier = parseIntParam(line, "tier", 0);
                 boolean skipKey = line.contains("\"skipKey\":true");
-                System.out.println("[MyBot] Dia cung: " + tm.startDiaCung(tier, skipKey));
+                System.out.println("[MyBot] Dia cung (Solo): " + tm.startDiaCung(tier, skipKey));
             } catch (Exception e) {
                 System.out.println("[MyBot] dia_cung_run error: " + e.getMessage());
+            }
+        } else if (line.contains("\"command\":\"dia_cung_leader\"")) {
+            // Địa cung — vai TRƯỞNG NHÓM (Team)
+            try {
+                TaskManager tm = TaskManager.getInstance();
+                if (!tm.ensureReflection()) {
+                    System.out.println("[MyBot] dia_cung_leader: reflection chua san sang");
+                    return;
+                }
+                String raw = parseStringParam(line, "members", "");
+                java.util.List<String> members = new java.util.ArrayList<String>();
+                if (raw != null && !raw.trim().isEmpty()) {
+                    for (String s : raw.split(";")) {
+                        if (s != null && !s.trim().isEmpty()) members.add(s.trim());
+                    }
+                }
+                int expected = parseIntParam(line, "expected", 0);
+                int zoneSlot = parseIntParam(line, "zone_slot", 0);
+                int zoneSlots = parseIntParam(line, "zone_slots", 1);
+                System.out.println("[MyBot] Dia cung (Lead): "
+                        + tm.startDiaCungLeader(members, expected, zoneSlot, zoneSlots));
+            } catch (Exception e) {
+                System.out.println("[MyBot] dia_cung_leader error: " + e.getMessage());
+            }
+        } else if (line.contains("\"command\":\"dia_cung_member\"")) {
+            // Địa cung — vai THÀNH VIÊN (Team)
+            try {
+                TaskManager tm = TaskManager.getInstance();
+                if (!tm.ensureReflection()) {
+                    System.out.println("[MyBot] dia_cung_member: reflection chua san sang");
+                    return;
+                }
+                String leader = parseStringParam(line, "leader", "");
+                int slot = parseIntParam(line, "slot", 0);
+                System.out.println("[MyBot] Dia cung (Member): " + tm.startDiaCungMember(leader, slot));
+            } catch (Exception e) {
+                System.out.println("[MyBot] dia_cung_member error: " + e.getMessage());
+            }
+        } else if (line.contains("\"command\":\"dia_cung_goto\"")) {
+            // Manager chuyển tiếp map/khu trưởng nhóm Địa Cung
+            try {
+                TaskManager tm = TaskManager.getInstance();
+                int mapId = parseIntParam(line, "map", 0);
+                int zoneId = parseIntParam(line, "zone", -1);
+                String leader = parseStringParam(line, "leader", "");
+                int lx = parseIntParam(line, "x", -1);
+                int ly = parseIntParam(line, "y", -1);
+                System.out.println("[MyBot] Dia cung (diem tap ket): "
+                        + tm.setDiaCungTarget(mapId, zoneId, leader, lx, ly));
+            } catch (Exception e) {
+                System.out.println("[MyBot] dia_cung_goto error: " + e.getMessage());
+            }
+        } else if (line.contains("\"command\":\"dia_cung_stop\"")) {
+            try {
+                TaskManager.getInstance().stopDiaCung();
+            } catch (Exception e) {
+                System.out.println("[MyBot] dia_cung_stop error: " + e.getMessage());
+            }
+        } else if (line.contains("\"command\":\"dia_cung_zone_full_notify\"")) {
+            try {
+                String member = parseStringParam(line, "member", "");
+                int wantZone = parseIntParam(line, "want_zone", -1);
+                TaskManager.getInstance().notifyDiaCungZoneFull(member, wantZone);
+            } catch (Exception e) {
+                System.out.println("[MyBot] dia_cung_zone_full_notify error: " + e.getMessage());
             }
         } else if (line.contains("\"command\":\"cam_thuat_leader\"")) {
             // Cấm thuật — vai TRƯỞNG NHÓM: lập nhóm, mở khoá, báo khu về Manager rồi gom member.

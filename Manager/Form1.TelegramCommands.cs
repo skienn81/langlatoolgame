@@ -39,6 +39,8 @@ namespace Manager
             if (tokens.Count == 0) return;
 
             string cmd = tokens[0].Substring(1).ToLowerInvariant();
+            int atIdx = cmd.IndexOf('@');
+            if (atIdx >= 0) cmd = cmd.Substring(0, atIdx);
             var args = tokens.Skip(1).ToList();
 
             try
@@ -96,7 +98,13 @@ namespace Manager
                 // ── Địa Cung ──
                 case "diacung":
                 case "dc":
-                    return TeleChayDiaCung(ResolveTargets(args));
+                    if (args.Count > 0 && (args[0].Equals("stop", StringComparison.OrdinalIgnoreCase)
+                                        || args[0].Equals("tat", StringComparison.OrdinalIgnoreCase)
+                                        || args[0].Equals("dung", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return TeleDungDiaCung();
+                    }
+                    return TeleChayDiaCung(args);
 
                 // ── Cấm Thuật ──
                 case "camthuat":
@@ -197,6 +205,10 @@ namespace Manager
                 // ── Hướng Dẫn ──
                 case "help":
                 case "start":
+                case "huongdan":
+                    return TeleHuongDan();
+
+                // ── GiftCode ──
                 case "giftcode":
                 case "code":
                 case "gift":
@@ -205,9 +217,6 @@ namespace Manager
                         return "ℹ️ <b>Cách dùng:</b> <code>/giftcode &lt;mã_1&gt; [mã_2]...</code>\nVí dụ: <code>/giftcode TRIAN2026 TANTHU2026</code>";
                     }
                     return TeleNhapGiftCode(args);
-
-                case "huongdan":
-                    return TeleHuongDan();
 
                 default:
                     return $"❓ <b>Không nhận diện được lệnh:</b> <code>/{TelegramBot.Esc(cmd)}</code>\n"
@@ -409,12 +418,131 @@ namespace Manager
             return $"⏹ <b>Auto Nhiệm Vụ Ngày:</b> Đã tắt cho <b>{count}</b> nick.";
         }
 
-        private string TeleChayDiaCung(List<string> targets)
+        private string TeleChayDiaCung(List<string> args = null)
         {
             if (_sonCapOn) SetSonCapButton(false);
+
+            var allTeams = LoadNhom("diacung");
+            bool isTeamMode = false;
+            var matchedTeams = new List<GroupSetup>();
+
+            if (args != null && args.Count > 0)
+            {
+                foreach (var arg in args)
+                {
+                    string t = arg.Trim();
+                    if (t.StartsWith("team:", StringComparison.OrdinalIgnoreCase)) t = t.Substring(5).Trim();
+                    var match = allTeams.FirstOrDefault(s => string.Equals(s.Name, t, StringComparison.OrdinalIgnoreCase)
+                                                          || string.Equals(s.Name, "team:" + t, StringComparison.OrdinalIgnoreCase)
+                                                          || string.Equals(s.Name.Replace("team:", ""), t, StringComparison.OrdinalIgnoreCase));
+                    if (match != null && !matchedTeams.Contains(match))
+                    {
+                        matchedTeams.Add(match);
+                        isTeamMode = true;
+                    }
+                    else if (t.StartsWith("team", StringComparison.OrdinalIgnoreCase))
+                    {
+                        isTeamMode = true;
+                    }
+                }
+            }
+
+            // ══════════════════════════════════════════════════════════
+            // CHẾ ĐỘ 1: ĐI THEO TEAM (/dc team1 team2 ...)
+            // ══════════════════════════════════════════════════════════
+            if (isTeamMode)
+            {
+                if (matchedTeams.Count == 0 && allTeams.Count > 0 && args != null && args.Any(a => a.Equals("all", StringComparison.OrdinalIgnoreCase) || a.Equals("*")))
+                {
+                    matchedTeams = allTeams;
+                }
+
+                if (matchedTeams.Count == 0)
+                {
+                    return "🏯⚠️ <b>Địa cung (Team):</b> Không tìm thấy nhóm nào phù hợp trong <code>doi_hinh.cfg</code>.\n"
+                         + "Ví dụ cấu hình: <code>[team:team1]</code> hoặc dùng <code>/team team1 truong mem1 mem2</code>.";
+                }
+
+                _dcActive.Clear();
+                _dcLastRelay.Clear();
+                _dcPlanned.Clear();
+
+                int started = 0;
+                int soNhom = matchedTeams.Count;
+                int thuTuNhom = -1;
+                var groupSummaries = new List<string>();
+
+                foreach (var g in matchedTeams)
+                {
+                    thuTuNhom++;
+                    _dcPlanned[g.Name] = g;
+
+                    var leaderSession = FindSession(g.Leader);
+                    if (leaderSession == null || !IsLoggedIn(g.Leader))
+                    {
+                        groupSummaries.Add($"• <b>{g.Name}</b>: ❌ Trưởng nhóm <b>{TenHienThi(g.Leader)}</b> chưa vào game");
+                        continue;
+                    }
+
+                    var ready = new List<string>();
+                    var memberNames = new List<string>();
+                    foreach (var m in g.Members)
+                    {
+                        if (string.Equals(m, g.Leader, StringComparison.OrdinalIgnoreCase)) continue;
+                        var ms = FindSession(m);
+                        if (ms != null && IsLoggedIn(m))
+                        {
+                            ready.Add(m);
+                            string charName = GetCharName(m);
+                            if (!string.IsNullOrEmpty(charName)) memberNames.Add(charName);
+                        }
+                    }
+
+                    var active = new GroupSetup
+                    {
+                        Name = g.Name,
+                        Leader = g.Leader,
+                        Members = new List<string>(ready)
+                    };
+                    _dcActive[g.Name] = active;
+
+                    // 1. Gửi lệnh cho Trưởng nhóm
+                    string memListStr = string.Join(";", memberNames);
+                    int totalCount = 1 + g.Members.Count(m => !string.Equals(m, g.Leader, StringComparison.OrdinalIgnoreCase));
+                    leaderSession.SendRawJson(
+                        $"{{\"command\":\"dia_cung_leader\",\"members\":\"{EscapeJson(memListStr)}\"," +
+                        $"\"expected\":{totalCount},\"zone_slot\":{thuTuNhom},\"zone_slots\":{soNhom}}}\n");
+
+                    // 2. Gửi lệnh cho các Thành viên
+                    string leaderChar = GetCharName(g.Leader);
+                    for (int i = 0; i < ready.Count; i++)
+                    {
+                        var ms = FindSession(ready[i]);
+                        ms?.SendRawJson(
+                            $"{{\"command\":\"dia_cung_member\",\"leader\":\"{EscapeJson(leaderChar)}\",\"slot\":{i}}}\n");
+                    }
+
+                    started++;
+                    string memText = ready.Count > 0
+                        ? string.Join(", ", ready.Select(TenHienThi))
+                        : "<i>(chưa có mem vào game)</i>";
+                    groupSummaries.Add($"• <b>{g.Name}</b>: 👑 <b>{TenHienThi(g.Leader)}</b> + {memText}");
+                }
+
+                Log($"🏯 Telegram: Bắt đầu Địa cung Team cho {started}/{matchedTeams.Count} nhóm.");
+                return $"🏯 <b>Địa cung (Team):</b> Đã bắt đầu <b>{started}/{matchedTeams.Count}</b> nhóm:\n"
+                     + string.Join("\n", groupSummaries);
+            }
+
+            // ══════════════════════════════════════════════════════════
+            // CHẾ ĐỘ 2: ĐI SOLO TỪNG ACC (/dc nick1 nick2 ... hoặc /dc)
+            // ══════════════════════════════════════════════════════════
+            var targets = ResolveTargets(args);
             if (targets.Count == 0)
             {
-                return "🏯⚠️ <b>Địa cung:</b> Không có nick nào được chọn hoặc đang online.";
+                return "🏯⚠️ <b>Địa cung:</b> Không có nick nào được chọn hoặc đang online.\n"
+                     + "👉 Đi solo: <code>/dc nick1 nick2 ...</code> (hoặc tick nick trong Manager)\n"
+                     + "👉 Đi team: <code>/dc team1 team2 ...</code>";
             }
 
             int sentCount = 0, skipped = 0;
@@ -444,13 +572,55 @@ namespace Manager
 
             if (sentCount == 0)
             {
-                return "🏯⚠️ <b>Địa cung:</b> Các nick chỉ định chưa vào game.";
+                return "🏯⚠️ <b>Địa cung (Solo):</b> Các nick chỉ định chưa vào game.";
             }
 
-            Log($"🏯 Telegram: Đã gửi lệnh Địa cung cho {sentCount} nick.");
-            return $"🏯 <b>Địa cung:</b> Đã gửi lệnh tới <b>{sentCount}</b> nick:\n"
+            Log($"🏯 Telegram: Đã gửi lệnh Địa cung Solo cho {sentCount} nick.");
+            return $"🏯 <b>Địa cung (Solo):</b> Đã gửi lệnh tới <b>{sentCount}</b> nick:\n"
                  + $"👉 {TelegramBot.Esc(string.Join(", ", names))}"
                  + (skipped > 0 ? $"\n<i>(Có {skipped} nick hôm nay đã nhận chìa nên vào thẳng hầm)</i>" : "");
+        }
+
+        private string TeleDungDiaCung()
+        {
+            int stopped = 0;
+            var stoppedUsers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var g in _dcPlanned.Values)
+            {
+                if (!string.IsNullOrEmpty(g.Leader) && stoppedUsers.Add(g.Leader))
+                {
+                    FindSession(g.Leader)?.SendRawJson("{\"command\":\"dia_cung_stop\"}\n");
+                    stopped++;
+                }
+                foreach (var m in g.Members)
+                {
+                    if (!string.IsNullOrEmpty(m) && stoppedUsers.Add(m))
+                    {
+                        FindSession(m)?.SendRawJson("{\"command\":\"dia_cung_stop\"}\n");
+                        stopped++;
+                    }
+                }
+            }
+
+            lock (_sessions)
+            {
+                foreach (var s in _sessions)
+                {
+                    if (!string.IsNullOrEmpty(s.Username) && stoppedUsers.Add(s.Username))
+                    {
+                        s.SendRawJson("{\"command\":\"dia_cung_stop\"}\n");
+                        stopped++;
+                    }
+                }
+            }
+
+            _dcActive.Clear();
+            _dcPlanned.Clear();
+            _dcLastRelay.Clear();
+
+            Log($"🏯 Telegram: Đã gửi lệnh dừng Địa cung cho {stopped} nick.");
+            return $"🏯🛑 <b>Địa cung:</b> Đã gửi lệnh dừng tới <b>{stopped}</b> nick.";
         }
 
         private string TeleChayCamThuat(List<string> args = null)
@@ -1691,9 +1861,12 @@ namespace Manager
 • <code>/nv stop</code> — Tắt Auto NV ngày
 
 🏯 <b>5. ĐỊA CUNG</b>
-• <code>/diacung all</code> (hoặc <code>/dc team1</code>) — Chạy Địa cung (tự nhận chìa/vào hầm)
+• <code>/dc team1 team2</code> — Chạy Địa cung theo team (Lead tạo nhóm gom mem, vào hầm lặp lại)
+• <code>/dc nick1 nick2</code> (hoặc <code>/dc all</code>) — Chạy Địa cung solo từng nick độc lập
+• <code>/dc stop</code> — Dừng hoạt động Địa cung
 
 🎒 <b>6. GOM ĐỒ & TIỆN ÍCH</b>
+• <code>/giftcode TRIAN2026 TANTHU2026</code> (hoặc <code>/code</code>) — Nhập giftcode tự động
 • <code>/gomdo</code> (hoặc <code>/gom</code>) — Gom đồ về lead theo <code>[gom]</code>
 • <code>/tinhthach all</code> (hoặc <code>/tt team1</code>) — Đổi tinh thạch tại NPC Kinkaku
 • <code>/quiz all</code> — Tự động trả lời Auto Quiz NPC
