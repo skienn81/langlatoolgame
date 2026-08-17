@@ -134,6 +134,8 @@ namespace Manager
         private Panel panelControls;
         private Panel panelConfig;
         private Label lblTitle;
+        private Button btnCheckUpdate;
+        private ReleaseInfo? _latestReleaseInfo;
         private DataGridView dgvAccounts;
         private RichTextBox rtbLogs;
         private Button btnLaunch;
@@ -232,15 +234,32 @@ namespace Manager
 
             // ── Row 0: Header ──
             panelHeader = new Panel { Dock = DockStyle.Fill, BackColor = Color.Transparent, Margin = new Padding(0, 0, 0, 4) };
+            
+            btnCheckUpdate = new Button
+            {
+                Text = "🔄  Cập nhật",
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                BackColor = ColPanel,
+                ForeColor = ColGray300,
+                FlatStyle = FlatStyle.Flat,
+                Size = new Size(125, 28),
+                Dock = DockStyle.Right,
+                Cursor = Cursors.Hand
+            };
+            btnCheckUpdate.FlatAppearance.BorderColor = ColBorder;
+            btnCheckUpdate.Click += async (s, e) => await CheckUpdateManuallyAsync();
+
             lblTitle = new Label
             {
-                Text = "🍃 LÀNG LÁ AUTO BOT",
+                Text = $"🍃 LÀNG LÁ AUTO BOT  •  v{UpdateManager.CURRENT_VERSION}",
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
                 ForeColor = ColGray300,
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleLeft
             };
+            
             panelHeader.Controls.Add(lblTitle);
+            panelHeader.Controls.Add(btnCheckUpdate);
 
             // ── Row 1: Config (2 dòng ngang) ──
             panelConfig = new Panel { Dock = DockStyle.Fill, BackColor = ColPanel, Margin = new Padding(0, 0, 0, 4) };
@@ -666,7 +685,78 @@ namespace Manager
             _ = FetchServerListAsync();
             ReloadAccountsGrid();
             KhoiDongTheoDoi();
+            _ = CheckUpdateInBackgroundAsync();
             Log($"Sẵn sàng! Trần {MaxClient()} client cùng lúc. Tick ✔ nick rồi bấm nút hoạt động.");
+        }
+
+        private async Task CheckUpdateInBackgroundAsync()
+        {
+            try
+            {
+                // Đợi 2 giây sau khi app khởi động để tránh nghẽn luồng chính
+                await Task.Delay(2000);
+                var info = await UpdateManager.CheckForUpdatesAsync();
+                _latestReleaseInfo = info;
+
+                if (info != null && info.HasUpdate)
+                {
+                    _syncContext?.Post(_ =>
+                    {
+                        if (btnCheckUpdate != null && !btnCheckUpdate.IsDisposed)
+                        {
+                            btnCheckUpdate.Text = $"🔔 Bản mới ({info.TagName})";
+                            btnCheckUpdate.BackColor = ColEmerald;
+                            btnCheckUpdate.ForeColor = Color.White;
+                        }
+                        Log($"🔔 Đã có bản cập nhật mới: {info.TagName}! Bấm nút 'Cập nhật' ở góc trên để nâng cấp.");
+                    }, null);
+                }
+            }
+            catch (Exception)
+            {
+                // Bỏ qua lỗi check ngầm
+            }
+        }
+
+        private async Task CheckUpdateManuallyAsync()
+        {
+            if (btnCheckUpdate != null)
+            {
+                btnCheckUpdate.Enabled = false;
+                btnCheckUpdate.Text = "⏳ Đang check...";
+            }
+
+            try
+            {
+                var info = await UpdateManager.CheckForUpdatesAsync();
+                _latestReleaseInfo = info;
+
+                using var dlg = new UpdateDialog(info);
+                dlg.ShowDialog(this);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Không thể kiểm tra bản cập nhật lúc này:\n" + ex.Message, "Lỗi kết nối", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                if (btnCheckUpdate != null && !btnCheckUpdate.IsDisposed)
+                {
+                    btnCheckUpdate.Enabled = true;
+                    if (_latestReleaseInfo != null && _latestReleaseInfo.HasUpdate)
+                    {
+                        btnCheckUpdate.Text = $"🔔 Bản mới ({_latestReleaseInfo.TagName})";
+                        btnCheckUpdate.BackColor = ColEmerald;
+                        btnCheckUpdate.ForeColor = Color.White;
+                    }
+                    else
+                    {
+                        btnCheckUpdate.Text = "🔄  Cập nhật";
+                        btnCheckUpdate.BackColor = ColPanel;
+                        btnCheckUpdate.ForeColor = ColGray300;
+                    }
+                }
+            }
         }
 
         /// <summary>Báo cho người dùng bằng hộp thoại — gom một chỗ để đổi cách báo là đổi một nơi.</summary>
