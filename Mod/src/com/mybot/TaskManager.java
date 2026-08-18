@@ -1650,25 +1650,25 @@ public class TaskManager {
      * new fm(53) → writeShort(npcId) → writeByte(menuIndex) → send()
      */
     private void sendSelectMenu(int npcId, int menuIndex) throws Exception {
-        if (npcId <= 0) {
-            int dlgId = readDialogNpcId();
-            if (dlgId > 0) npcId = dlgId;
-            else {
-                int[] best = findQuizTsunadeNpc(null);
-                if (best != null && best[0] > 0) npcId = best[0];
-            }
+        int targetId = npcId;
+        int dlgId = readDialogNpcId();
+        if (dlgId != -999) {
+            targetId = dlgId; // Bảng thoại đang mở: dùng chính xác au.as từ bảng thoại của game (ví dụ -1)
+        } else if (targetId <= 0 && quizConfirmedEventNpcId > 0) {
+            targetId = quizConfirmedEventNpcId;
         }
+
         Object packet = fmClass.getConstructor(byte.class).newInstance((byte) 53);
         Method writeShort = fmClass.getDeclaredMethod("t", int.class);
         writeShort.setAccessible(true);
-        writeShort.invoke(packet, npcId);
+        writeShort.invoke(packet, targetId);
         Method writeByte = fmClass.getDeclaredMethod("s", int.class);
         writeByte.setAccessible(true);
         writeByte.invoke(packet, menuIndex);
         Method send = fmClass.getDeclaredMethod("aG");
         send.setAccessible(true);
         send.invoke(packet);
-        System.out.println("[Quiz Debug] Sent CMD 53 (SelectMenu) -> npcId=" + npcId + ", menuIndex=" + menuIndex);
+        System.out.println("[Quiz Debug] Sent CMD 53 (SelectMenu) -> targetId=" + targetId + ", menuIndex=" + menuIndex);
     }
 
     /**
@@ -1781,6 +1781,10 @@ public class TaskManager {
      *         bỏ qua thì cùng lắm là không gửi, còn hơn gửi vào chỗ chắc chắn bị game bỏ.
      */
     private long sendChangeZone(int zoneId) throws Exception {
+        if (getCurrentMapId() == 86 || getMapAnToan() == 86 || quizStep > 0) {
+            log("Doi khu BI CHAN: Dang o Truong Konoha (Map 86) hoac dang Auto Quiz -> KHONG DOI KHU!");
+            return 0;
+        }
         long now = System.currentTimeMillis();
         long con = zoneCooldownLeft(now);
         if (con > 0) {
@@ -2225,6 +2229,38 @@ public class TaskManager {
         return -1;
     }
 
+    private boolean isEntityNamed(Object entity, String keyword) {
+        if (entity == null || keyword == null) return false;
+        String kw = boDau(keyword.toLowerCase());
+        try {
+            // 1. Kiểm tra NPC
+            String npcName = npcNameOf(entity);
+            if (npcName != null && boDau(npcName).contains(kw)) return true;
+
+            // 2. Kiểm tra Mob / Boss
+            String[] mobName = mobTemplateName(entity);
+            if (mobName != null) {
+                if (mobName[0] != null && boDau(mobName[0]).contains(kw)) return true;
+                if (mobName[1] != null && boDau(mobName[1]).contains(kw)) return true;
+            }
+
+            // 3. Quét mọi trường String của đối tượng và các lớp cha
+            for (Class<?> c = entity.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (f.getType() == String.class) {
+                        f.setAccessible(true);
+                        Object val = f.get(entity);
+                        if (val instanceof String) {
+                            String s = boDau(((String) val));
+                            if (s.contains(kw)) return true;
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignore) {}
+        return false;
+    }
+
     private String getEntityName(Object entity) {
         if (entity == null) return "";
         try {
@@ -2335,16 +2371,11 @@ public class TaskManager {
                     if (targetObj != null) {
                         int tId = getEntityId(targetObj);
                         if (tId > 0 && (ignoredIds == null || !ignoredIds.contains(Integer.valueOf(tId)))) {
-                            String tName = getEntityName(targetObj);
-                            String tLower = boDau(tName);
-                            if (tLower.contains("tsunade") && !tLower.contains("tobirama") && !tLower.contains("hashirama")) {
+                            if (isEntityNamed(targetObj, "tsunade") || getEntityMaxHp(targetObj) >= 10000) {
                                 short tx = getEntityX(targetObj);
                                 short ty = getEntityY(targetObj);
-                                // Bỏ qua con tĩnh ở (970, 564)
-                                if (Math.hypot(tx - 970, ty - 564) >= 100) {
-                                    System.out.println("[Quiz Scan z.a] Bắt trúng Senju Tsunade đang được trỏ: ID=" + tId + " at (" + tx + "," + ty + ")");
-                                    return new int[]{ tId, tx, ty };
-                                }
+                                System.out.println("[Quiz Scan z.a] Bắt trúng Senju Tsunade đang được trỏ: ID=" + tId + " at (" + tx + "," + ty + ")");
+                                return new int[]{ tId, tx, ty };
                             }
                         }
                     }
@@ -2354,9 +2385,9 @@ public class TaskManager {
             int[] bestNpc = null;
             int bestScore = -999999;
 
-            // 2. Quét toàn bộ thực thể trên map trong các vector
-            Field[] vectorsToScan = new Field[]{ zFieldE, zFieldO, zFieldF, zFieldD };
-            String[] vecNames = new String[]{ "z.E (Event/Mob)", "z.O (Boss)", "z.F (NPC)", "z.D (Char)" };
+            // 2. Quét toàn bộ NPC và Mob/Boss trên map (KHÔNG quét z.D của người chơi!)
+            Field[] vectorsToScan = new Field[]{ zFieldF, zFieldE, zFieldO };
+            String[] vecNames = new String[]{ "z.F (NPC)", "z.E (Event/Mob)", "z.O (Boss)" };
 
             int curX = getPlayerX();
             int curY = getPlayerY();
@@ -2373,34 +2404,39 @@ public class TaskManager {
                     if (e == null) continue;
 
                     int id = getEntityId(e);
-                    if (id <= 0) continue;
+                    // CHẶN ID NGƯỜI CHƠI (>50000) HOẶC ID ÂM
+                    if (id <= 0 || id > 50000) continue;
                     if (ignoredIds != null && ignoredIds.contains(Integer.valueOf(id))) continue;
 
-                    String name = getEntityName(e);
-                    if (name == null || name.isEmpty()) continue;
-                    String lower = boDau(name);
-
-                    // BẮT BUỘC TÊN PHẢI CHỨA TSUNADE VÀ KHÔNG PHẢI TOBIRAMA / HASHIRAMA
-                    if (!lower.contains("tsunade") || lower.contains("tobirama") || lower.contains("hashirama")) {
+                    // Loại trừ Tobirama / Hashirama
+                    if (isEntityNamed(e, "tobirama") || isEntityNamed(e, "hashirama")) {
                         continue;
                     }
 
-                    short x = getEntityX(e);
-                    short y = getEntityY(e);
+                    boolean isTsunade = isEntityNamed(e, "tsunade");
                     int maxHp = getEntityMaxHp(e);
                     int curHp = getEntityHp(e);
+                    short x = getEntityX(e);
+                    short y = getEntityY(e);
 
-                    // CHẶN CON TSUNADE TĨNH: Đứng cố định tại (970, 564) hoặc 100 máu
-                    if (Math.hypot(x - 970, y - 564) < 120 || maxHp == 100) {
+                    // CHỈ CHẶN CON TĨNH KHI NÓ CÓ 100 MÁU VÀ ĐỨNG CỐ ĐỊNH Ở 970, 564
+                    if (maxHp <= 100 && Math.hypot(x - 970, y - 564) < 50) {
+                        continue;
+                    }
+
+                    // Nếu không có tên Tsunade và cũng không có 100.000 máu -> Bỏ qua
+                    if (!isTsunade && maxHp != 100000) {
                         continue;
                     }
 
                     int dist = (int) Math.hypot(x - curX, y - curY);
                     int score = 100000 - dist;
-                    if (maxHp >= 10000) score += 200000; // Ưu tiên hàng đầu con 100k máu!
-                    if (vIdx == 0 || vIdx == 1) score += 50000; // Ưu tiên nằm trong z.E / z.O
+                    if (maxHp == 100000) score += 300000; // Ưu tiên tuyệt đối con có 100.000 HP!
+                    if (isTsunade) score += 100000;
+                    if (vIdx == 1 || vIdx == 2) score += 50000; // Ưu tiên z.E / z.O
 
-                    System.out.println("[Quiz Scan " + vecNames[vIdx] + "] Candidate Senju Tsunade: '" + name + "' (ID=" + id + ") HP=" + curHp + "/" + maxHp + " at (" + x + "," + y + ") dist=" + dist + " score=" + score);
+                    String name = getEntityName(e);
+                    System.out.println("[Quiz Scan " + vecNames[vIdx] + "] Candidate: '" + name + "' (ID=" + id + ") HP=" + curHp + "/" + maxHp + " at (" + x + "," + y + ") dist=" + dist + " score=" + score);
 
                     if (score > bestScore) {
                         bestScore = score;
@@ -2498,6 +2534,16 @@ public class TaskManager {
     private boolean dcAutoAcceptChanged = false;
     private long dcZoneFullAt = 0;
 
+    private int diaCungVillageMap() {
+        int m = getSettingInt("dia_cung_map", 0);
+        if (m <= 0) {
+            loadAnchorConfig();
+            if (villageConfig != null) m = villageConfig[0];
+        }
+        if (m <= 0) m = 68;
+        return m;
+    }
+
     /**
      * Bắt đầu hoạt động Địa cung (Solo).
      * @param tier    hầm cần vào 1..4 (sơ/trung/cao/thượng cấp); 0 = tự thử các cửa
@@ -2508,6 +2554,31 @@ public class TaskManager {
         if (!reflectionReady) return "LOI: reflection chua san sang";
         if (zFieldGroup == null || emMethodQ == null || emMethodP == null) {
             return "LOI: chua map duoc doi tuong nhom (a.em) - xem log reflection";
+        }
+        int curMap = 0;
+        try { curMap = getCurrentMapId(); } catch (Exception ignore) {}
+        int villageMap = diaCungVillageMap();
+        if (curMap > 0 && curMap != villageMap && (afkMapId <= 0 || curMap != afkMapId)) {
+            stopCurrentActivity();
+            resetDiaCung();
+            dcRole = DC_ROLE_SOLO;
+            dcTier = tier;
+            dcSavedTier = (tier > 0) ? tier : 0;
+            dcSkipKey = true;
+            dcKeyClaimed = true;
+            dcDungeonMap = curMap;
+            dcStep = DC_IN_DUNGEON;
+            dcFailTries = 0;
+            dcDoorTryIndex = 0;
+            dcDoorCandidates.clear();
+            dcDeadline = diaCungDungeonDeadline(System.currentTimeMillis());
+            clearNavTarget();
+            if (getSettingInt("dia_cung_combat", 1) == 1) {
+                setAutoCombat(true);
+                autoCombatRequested = true;
+            }
+            log("Dia cung (Solo): PHAT HIEN DANG TRONG HAM (map " + curMap + ") -> tiep tuc danh, khong quay ve lang!");
+            return "da tiep tuc Dia cung (dang trong ham map " + curMap + ")";
         }
         stopCurrentActivity();
         resetDiaCung();
@@ -2539,6 +2610,33 @@ public class TaskManager {
         if (zFieldGroup == null || emMethodQ == null || emMethodP == null) {
             return "LOI: chua map duoc doi tuong nhom (a.em)";
         }
+        int curMap = 0;
+        try { curMap = getCurrentMapId(); } catch (Exception ignore) {}
+        int villageMap = diaCungVillageMap();
+        if (curMap > 0 && curMap != villageMap && (afkMapId <= 0 || curMap != afkMapId)) {
+            stopCurrentActivity();
+            resetDiaCung();
+            dcRole = DC_ROLE_LEADER;
+            dcMembers = (memberNames != null) ? memberNames : new java.util.ArrayList<String>();
+            dcExpected = (expected > 0) ? expected : (1 + dcMembers.size());
+            int khuDau = khuXuatPhatNhom(zoneSlot, zoneSlots, getSettingInt("dia_cung_max_zone", 30));
+            dcZoneCursor = khuDau - 1;
+            dcSkipKey = true;
+            dcKeyClaimed = true;
+            dcDungeonMap = curMap;
+            dcStep = DC_IN_DUNGEON;
+            dcFailTries = 0;
+            dcDoorTryIndex = 0;
+            dcDoorCandidates.clear();
+            dcDeadline = diaCungDungeonDeadline(System.currentTimeMillis());
+            clearNavTarget();
+            if (getSettingInt("dia_cung_combat", 1) == 1) {
+                setAutoCombat(true);
+                autoCombatRequested = true;
+            }
+            log("Dia cung (Lead): PHAT HIEN DANG TRONG HAM (map " + curMap + ") -> tiep tuc danh, khong quay ve lang!");
+            return "da tiep tuc Dia cung (Lead - dang trong ham map " + curMap + ")";
+        }
         stopCurrentActivity();
         resetDiaCung();
         dcRole = DC_ROLE_LEADER;
@@ -2563,6 +2661,29 @@ public class TaskManager {
         if (!reflectionReady) return "LOI: reflection chua san sang";
         if (zFieldGroup == null || emMethodQ == null) return "LOI: chua map duoc doi tuong nhom (a.em)";
         if (leaderName == null || leaderName.trim().isEmpty()) return "LOI: thieu ten truong nhom";
+        int curMap = 0;
+        try { curMap = getCurrentMapId(); } catch (Exception ignore) {}
+        int villageMap = diaCungVillageMap();
+        if (curMap > 0 && curMap != villageMap && (afkMapId <= 0 || curMap != afkMapId)) {
+            stopCurrentActivity();
+            resetDiaCung();
+            dcRole = DC_ROLE_MEMBER;
+            dcLeaderName = leaderName.trim();
+            dcSlot = Math.max(0, slot);
+            dcSkipKey = true;
+            dcKeyClaimed = true;
+            dcDungeonMap = curMap;
+            dcStep = DC_IN_DUNGEON;
+            dcFailTries = 0;
+            dcDeadline = diaCungDungeonDeadline(System.currentTimeMillis());
+            clearNavTarget();
+            if (getSettingInt("dia_cung_combat", 1) == 1) {
+                setAutoCombat(true);
+                autoCombatRequested = true;
+            }
+            log("Dia cung (Member): PHAT HIEN DANG TRONG HAM (map " + curMap + ") -> tiep tuc danh, khong quay ve lang!");
+            return "da tiep tuc Dia cung (Member - dang trong ham map " + curMap + ")";
+        }
         stopCurrentActivity();
         resetDiaCung();
         dcRole = DC_ROLE_MEMBER;
@@ -2774,7 +2895,22 @@ public class TaskManager {
                 loadAnchorConfig();
                 if (villageConfig != null) villageMap = villageConfig[0];
             }
-            if (villageMap <= 0) villageMap = 68;
+            int curMapNow = getCurrentMapId();
+            if (curMapNow > 0 && curMapNow != villageMap && (afkMapId <= 0 || curMapNow != afkMapId)) {
+                if (dcStep != DC_IN_DUNGEON && dcStep != DC_GOTO_MAP && dcStep != DC_L_GOTO_MAP && dcStep != DC_M_GOTO_MAP) {
+                    dcDungeonMap = curMapNow;
+                    dcStep = DC_IN_DUNGEON;
+                    dcDeadline = diaCungDungeonDeadline(now);
+                    clearNavTarget();
+                    if (getSettingInt("dia_cung_combat", 1) == 1) {
+                        setAutoCombat(true);
+                        autoCombatRequested = true;
+                    }
+                    sendDiaCungProgress("Phat hien dang trong ham dia cung (map " + curMapNow + ") -> tiep tuc danh");
+                    dcNextTime = now + pollMs;
+                    return;
+                }
+            }
 
             // ══════════════════════════════════════════════════════════════
             // CHẾ ĐỘ 1: SOLO (ĐI ĐỘC LẬP 1 MÌNH)
@@ -2870,7 +3006,7 @@ public class TaskManager {
                     }
 
                     int playerCount = countPlayersInZone();
-                    int maxPlayers = getSettingInt("dia_cung_max_players_in_zone", 5);
+                    int maxPlayers = getSettingInt("dia_cung_max_players_in_zone", 12);
                     if (playerCount >= maxPlayers && dcZoneHops < 15) {
                         int maxZone = getSettingInt("dia_cung_max_zone", 30);
                         dcZoneCursor = nextZoneToTry(dcZoneCursor, zone, maxZone);
@@ -2879,7 +3015,7 @@ public class TaskManager {
                         dcGroupSentZone = -1;
                         dcZonePending = true;
                         dcZoneWaits = 0;
-                        sendDiaCungProgress("khu " + zone + " co " + playerCount + " nguoi (>= " + maxPlayers + ") -> tim khu < 5 nguoi, sang khu " + dcZoneCursor);
+                        sendDiaCungProgress("khu " + zone + " co " + playerCount + " nguoi (>= " + maxPlayers + ") -> tim khu < " + maxPlayers + " nguoi, sang khu " + dcZoneCursor);
                         dcNextTime = now + zoneWait;
                         return;
                     }
@@ -3171,7 +3307,7 @@ public class TaskManager {
                     }
 
                     int playerCount = countPlayersInZone();
-                    int maxPlayers = getSettingInt("dia_cung_max_players_in_zone", 5);
+                    int maxPlayers = getSettingInt("dia_cung_max_players_in_zone", 12);
                     if (playerCount >= maxPlayers && dcZoneHops < 15) {
                         int maxZone = getSettingInt("dia_cung_max_zone", 30);
                         dcZoneCursor = nextZoneToTry(dcZoneCursor, zone, maxZone);
@@ -3179,7 +3315,7 @@ public class TaskManager {
                         dcZoneHops++;
                         dcZonePending = true;
                         dcZoneWaits = 0;
-                        sendDiaCungProgress("Lead tim khu vang (< 5 nguoi), doi sang khu " + dcZoneCursor);
+                        sendDiaCungProgress("Lead tim khu vang (< " + maxPlayers + " nguoi), doi sang khu " + dcZoneCursor);
                         dcNextTime = now + zoneWait;
                         return;
                     }
@@ -3843,6 +3979,28 @@ public class TaskManager {
         if (zFieldGroup == null || emMethodQ == null || emMethodP == null) {
             return "LOI: chua map duoc doi tuong nhom (a.em)";
         }
+        int curMap = 0;
+        try { curMap = getCurrentMapId(); } catch (Exception ignore) {}
+        int wantMap = camThuatMap();
+        int dMap = getSettingInt("cam_thuat_dungeon_map", 89);
+        if (curMap > 0 && (curMap == dMap || (dMap <= 0 && curMap != wantMap && (afkMapId <= 0 || curMap != afkMapId)))) {
+            stopCurrentActivity();
+            resetCamThuat();
+            ctRole = 1;
+            ctDungeonMap = curMap;
+            ctStep = CT_IN_DUNGEON;
+            ctMembers = (memberNames != null) ? memberNames : new java.util.ArrayList<String>();
+            ctExpected = (expected > 0) ? expected : (1 + ctMembers.size());
+            ctStartAt = System.currentTimeMillis();
+            ctDeadline = dungeonDeadline(ctStartAt);
+            clearNavTarget();
+            if (getSettingInt("cam_thuat_combat", 1) == 1) {
+                setAutoCombat(true);
+                autoCombatRequested = true;
+            }
+            log("Cam thuat (Lead): PHAT HIEN DANG TRONG HAM (map " + curMap + ") -> tiep tuc danh, khong quay ve lang!");
+            return "da tiep tuc Cam thuat (Lead - dang trong ham map " + curMap + ")";
+        }
         stopCurrentActivity();
         resetCamThuat();
         ctRole = 1;
@@ -3871,6 +4029,28 @@ public class TaskManager {
         if (!reflectionReady) return "LOI: reflection chua san sang";
         if (zFieldGroup == null || emMethodQ == null) return "LOI: chua map duoc doi tuong nhom (a.em)";
         if (leaderName == null || leaderName.trim().isEmpty()) return "LOI: thieu ten truong nhom";
+        int curMap = 0;
+        try { curMap = getCurrentMapId(); } catch (Exception ignore) {}
+        int wantMap = camThuatMap();
+        int dMap = getSettingInt("cam_thuat_dungeon_map", 89);
+        if (curMap > 0 && (curMap == dMap || (dMap <= 0 && curMap != wantMap && (afkMapId <= 0 || curMap != afkMapId)))) {
+            stopCurrentActivity();
+            resetCamThuat();
+            ctRole = 2;
+            ctLeaderName = leaderName.trim();
+            ctSlot = slot < 0 ? 0 : slot;
+            ctDungeonMap = curMap;
+            ctStep = CT_IN_DUNGEON;
+            ctStartAt = System.currentTimeMillis();
+            ctDeadline = dungeonDeadline(ctStartAt);
+            clearNavTarget();
+            if (getSettingInt("cam_thuat_combat", 1) == 1) {
+                setAutoCombat(true);
+                autoCombatRequested = true;
+            }
+            log("Cam thuat (Member): PHAT HIEN DANG TRONG HAM (map " + curMap + ") -> tiep tuc danh, khong quay ve lang!");
+            return "da tiep tuc Cam thuat (Member - dang trong ham map " + curMap + ")";
+        }
         stopCurrentActivity();
         resetCamThuat();
         ctRole = 2;
@@ -4718,9 +4898,9 @@ public class TaskManager {
                     return;
                 }
 
-                // Kiểm tra số lượng người chơi trong khu: ưu tiên chọn khu có dưới 5 người để tạo nhóm
+                // Kiểm tra số lượng người chơi trong khu: ưu tiên chọn khu có dưới 12 người để tạo nhóm
                 int playerCount = countPlayersInZone();
-                int maxPlayers = getSettingInt("cam_thuat_max_players_in_zone", 5);
+                int maxPlayers = getSettingInt("cam_thuat_max_players_in_zone", 12);
                 if (playerCount >= maxPlayers && ctZoneHops < getSettingInt("cam_thuat_max_zone_hop", 15)) {
                     int maxZone = getSettingInt("cam_thuat_max_zone", 20);
                     ctZoneCursor = nextZoneToTry(ctZoneCursor, zone, maxZone);
@@ -4729,7 +4909,7 @@ public class TaskManager {
                     ctGroupSentZone = -1;
                     ctZonePending = true;
                     ctZoneWaits = 0;
-                    camThuatProgress("khu " + zone + " co " + playerCount + " nguoi (>= " + maxPlayers + ") -> tim khu vang < 5 nguoi, doi sang khu " + ctZoneCursor);
+                    camThuatProgress("khu " + zone + " co " + playerCount + " nguoi (>= " + maxPlayers + ") -> tim khu vang < " + maxPlayers + " nguoi, doi sang khu " + ctZoneCursor);
                     ctNextTime = now + zoneWait;
                     return;
                 }
@@ -6982,6 +7162,24 @@ public class TaskManager {
         if (zFieldGroup == null || emMethodQ == null || emMethodP == null) {
             return "LOI: chua map duoc doi tuong nhom (a.em)";
         }
+        int curMap = 0;
+        try { curMap = getCurrentMapId(); } catch (Exception ignore) {}
+        int gather = sonCapMap();
+        if (curMap > 0 && gather > 0 && curMap != gather && (afkMapId <= 0 || curMap != afkMapId)) {
+            stopCurrentActivity();
+            resetSonCap();
+            scRole = 1;
+            scMembers = (memberNames != null) ? memberNames : new java.util.ArrayList<String>();
+            scExpected = (expected > 0) ? expected : (1 + scMembers.size());
+            int khuDau = khuXuatPhatNhom(zoneSlot, zoneSlots, getSettingInt("son_cap_max_zone", 20));
+            scZoneCursor = khuDau - 1;
+            scStep = SC_IN_FLOOR;
+            scDeadline = Long.MAX_VALUE;
+            clearNavTarget();
+            try { sonCapEnterFloor(System.currentTimeMillis(), curMap, 1); } catch (Exception ignore) {}
+            log("Son cap (Lead): PHAT HIEN DANG TRONG TANG SON CAP (map " + curMap + ") -> tiep tuc danh luon!");
+            return "da tiep tuc Son cap (Lead - dang trong tang map " + curMap + ")";
+        }
         stopCurrentActivity();
         resetSonCap();
         scRole = 1;
@@ -7004,6 +7202,22 @@ public class TaskManager {
         if (!reflectionReady) return "LOI: reflection chua san sang";
         if (zFieldGroup == null || emMethodQ == null) return "LOI: chua map duoc doi tuong nhom (a.em)";
         if (leaderName == null || leaderName.trim().isEmpty()) return "LOI: thieu ten truong nhom";
+        int curMap = 0;
+        try { curMap = getCurrentMapId(); } catch (Exception ignore) {}
+        int gather = sonCapMap();
+        if (curMap > 0 && gather > 0 && curMap != gather && (afkMapId <= 0 || curMap != afkMapId)) {
+            stopCurrentActivity();
+            resetSonCap();
+            scRole = 2;
+            scLeaderName = leaderName.trim();
+            scSlot = slot < 0 ? 0 : slot;
+            scStep = SC_IN_FLOOR;
+            scDeadline = Long.MAX_VALUE;
+            clearNavTarget();
+            try { sonCapEnterFloor(System.currentTimeMillis(), curMap, 1); } catch (Exception ignore) {}
+            log("Son cap (Member): PHAT HIEN DANG TRONG TANG SON CAP (map " + curMap + ") -> tiep tuc danh luon!");
+            return "da tiep tuc Son cap (Member - dang trong tang map " + curMap + ")";
+        }
         stopCurrentActivity();
         resetSonCap();
         scRole = 2;
@@ -7139,9 +7353,9 @@ public class TaskManager {
                     }
                 }
 
-                // Kiểm tra số lượng người chơi trong khu: ưu tiên chọn khu có dưới 5 người để tạo nhóm
+                // Kiểm tra số lượng người chơi trong khu: ưu tiên chọn khu có dưới 12 người để tạo nhóm
                 int playerCount = countPlayersInZone();
-                int maxPlayers = getSettingInt("son_cap_max_players_in_zone", 5);
+                int maxPlayers = getSettingInt("son_cap_max_players_in_zone", 12);
                 if (playerCount >= maxPlayers && scZoneHops < getSettingInt("son_cap_max_hops", 20)) {
                     int maxZone = getSettingInt("son_cap_max_zone", 20);
                     scZoneCursor = nextZoneToTry(scZoneCursor, zone, maxZone);
@@ -7149,7 +7363,7 @@ public class TaskManager {
                     scZoneHops++;
                     scZonePending = true;
                     scZoneWaits = 0;
-                    sonCapProgress("khu " + zone + " co " + playerCount + " nguoi (>= " + maxPlayers + ") -> tim khu vang < 5 nguoi, doi sang khu " + scZoneCursor);
+                    sonCapProgress("khu " + zone + " co " + playerCount + " nguoi (>= " + maxPlayers + ") -> tim khu vang < " + maxPlayers + " nguoi, doi sang khu " + scZoneCursor);
                     scNextTime = now + zoneWait;
                     return;
                 }
@@ -8151,6 +8365,27 @@ public class TaskManager {
     public String startAgt(int role) {
         if (!reflectionReady) initReflection();
         if (!reflectionReady) return "LOI: reflection chua san sang";
+        int curMap = 0;
+        try { curMap = getCurrentMapId(); } catch (Exception ignore) {}
+        int g1 = getSettingInt("agt_gate1_map", 46);
+        int g2 = getSettingInt("agt_gate2_map", 47);
+        if (curMap > 0 && (curMap == g1 || curMap == g2)) {
+            stopCurrentActivity();
+            resetAgt();
+            agtRole = 2;
+            agtGateMap = curMap;
+            agtStep = AGT_IN_GATE;
+            agtSawMobs = false;
+            agtInGateAt = System.currentTimeMillis();
+            agtDeadline = agtGateDeadline(System.currentTimeMillis());
+            clearNavTarget();
+            if (getSettingInt("agt_combat", 1) == 1) {
+                setAutoCombat(true);
+                autoCombatRequested = true;
+            }
+            log("AGT: PHAT HIEN DANG TRONG AI GIA TOC (map " + curMap + ") -> tiep tuc danh, khong quay ve lang!");
+            return "da tiep tuc AGT (dang trong map " + curMap + ")";
+        }
         stopCurrentActivity();
         resetAgt();
         agtRole = 2;
@@ -12213,6 +12448,22 @@ public class TaskManager {
     public String startDaiHoi() {
         if (!reflectionReady) initReflection();
         if (!reflectionReady) return "LOI: reflection chua san sang";
+        int curMap = 0;
+        try { curMap = getCurrentMapId(); } catch (Exception ignore) {}
+        int wantMap = daiHoiMap();
+        if (curMap > 0 && curMap != wantMap && !mapInList(getSetting("dai_hoi_out_maps", ""), curMap) && (afkMapId <= 0 || curMap != afkMapId)) {
+            stopCurrentActivity();
+            resetDaiHoi();
+            dhStep = DH_IN_ARENA;
+            dhDeadline = daiHoiRunDeadline(System.currentTimeMillis());
+            clearNavTarget();
+            if (getSettingInt("dai_hoi_combat", 1) == 1) {
+                setAutoCombat(true);
+                autoCombatRequested = true;
+            }
+            log("Dai hoi: PHAT HIEN DANG TRONG DAU TRUONG (map " + curMap + ") -> tiep tuc danh luon!");
+            return "da tiep tuc Dai hoi (dang trong map " + curMap + ")";
+        }
         stopCurrentActivity();
         resetDaiHoi();
         dhStep = DH_GOTO_MAP;
@@ -13267,7 +13518,8 @@ public class TaskManager {
 
     public void tick() {
 
-        if (reflectionReady) checkNpcClickProbe();
+        // Tạm thời tắt dò mục tiêu/NPC - 18h mai mở lại để dò NPC tiếp
+        // if (reflectionReady) checkNpcClickProbe();
 
         // Nhận chìa Địa cung — chạy độc lập, không cần bật Auto NV
         if (dcStep > 0) {
@@ -15041,9 +15293,30 @@ public class TaskManager {
 
     private int npcProbeLastId = -1;
     private String npcProbeLastQuestion = "";
+    private Object npcProbeLastTarget = null;
 
     private void checkNpcClickProbe() {
         try {
+            // 1. Soi mục tiêu z.a mà người chơi đang trỏ / bấm ENTER
+            if (zFieldTarget != null) {
+                Object tObj = zFieldTarget.get(getZ());
+                if (tObj != null && tObj != npcProbeLastTarget) {
+                    npcProbeLastTarget = tObj;
+                    int tId = getEntityId(tObj);
+                    String tName = getEntityName(tObj);
+                    int tMaxHp = getEntityMaxHp(tObj);
+                    int tHp = getEntityHp(tObj);
+                    short tx = getEntityX(tObj);
+                    short ty = getEntityY(tObj);
+                    if (tId > 0) {
+                        String probeMsg = "🎯 [TRỎ MỤC TIÊU z.a] '" + tName + "' (ID=" + tId + ") Máu: " + tHp + "/" + tMaxHp + " tại (" + tx + "," + ty + ")";
+                        System.out.println(probeMsg);
+                        pushQuizStatus(probeMsg);
+                    }
+                }
+            }
+
+            // 2. Soi bảng thoại NPC khi mở ra
             int[] dlg = detectDialog();
             if (dlg == null || dlg[0] < 0) {
                 npcProbeLastId = -1;
@@ -15059,18 +15332,16 @@ public class TaskManager {
                 npcProbeLastId = npcId;
                 npcProbeLastQuestion = question;
 
-                Object npcObj = findNpcOnMap(npcId);
-                String npcName = npcNameOf(npcObj);
+                Object npcObj = findNpcOnMapAnyVector(npcId);
+                String npcName = getEntityName(npcObj);
                 if (npcName == null || npcName.isEmpty()) npcName = "NPC #" + npcId;
 
                 int mapId = getCurrentMapId();
                 int x = getPlayerX();
                 int y = getPlayerY();
-                if (npcObj != null && frFieldAr != null && frFieldAs != null) {
-                    try {
-                        x = frFieldAr.getShort(npcObj);
-                        y = frFieldAs.getShort(npcObj);
-                    } catch (Exception ignore) {}
+                if (npcObj != null) {
+                    x = getEntityX(npcObj);
+                    y = getEntityY(npcObj);
                 }
 
                 String[] menuItems = readDialogMenuItems();
@@ -15082,22 +15353,9 @@ public class TaskManager {
                     }
                 }
 
-                System.out.println("[NPC PROBE CONSOLE] Opened NPC: " + npcName + " (ID=" + npcId + ") Map=" + mapId + " Pos=(" + x + "," + y + ")");
-                System.out.println("   -> Menu: [" + menuSb.toString() + "]");
-                if (!question.isEmpty()) System.out.println("   -> Question: \"" + question + "\"");
-
-                java.io.PrintWriter w = Auto.getWriter();
-                if (w != null) {
-                    w.print("{\"type\":\"npc_clicked_probe\",\"username\":\"" + escapeJson(Auto.getUsername()) + "\""
-                            + ",\"npcId\":" + npcId
-                            + ",\"name\":\"" + escapeJson(npcName) + "\""
-                            + ",\"map\":" + mapId
-                            + ",\"x\":" + x
-                            + ",\"y\":" + y
-                            + ",\"menu\":\"" + escapeJson(menuSb.toString()) + "\""
-                            + ",\"question\":\"" + escapeJson(question) + "\"}\n");
-                    w.flush();
-                }
+                String dlgMsg = "💬 [ĐÃ MỞ BẢNG THOẠI] " + npcName + " (ID=" + npcId + ") Menu: [" + menuSb.toString() + "]" + (!question.isEmpty() ? (" | Câu hỏi: \"" + question + "\"") : "");
+                System.out.println(dlgMsg);
+                pushQuizStatus(dlgMsg);
             }
         } catch (Exception ignore) {}
     }
@@ -15241,12 +15499,49 @@ public class TaskManager {
     }
 
     private void tickQuiz(long now) {
+        // BẮT TRÚNG MỤC TIÊU z.a KHI NGƯỜI CHƠI NHẮM / BẤM ENTER
+        if (zFieldTarget != null) {
+            try {
+                Object tObj = zFieldTarget.get(getZ());
+                if (tObj != null) {
+                    int tId = getEntityId(tObj);
+                    if (tId > 0 && tId <= 50000) {
+                        String tName = getEntityName(tObj);
+                        int tMaxHp = getEntityMaxHp(tObj);
+                        int tHp = getEntityHp(tObj);
+                        short tx = getEntityX(tObj);
+                        short ty = getEntityY(tObj);
+                        if (this.quizConfirmedEventNpcId != tId) {
+                            this.quizConfirmedEventNpcId = tId;
+                            this.quizNpcId = tId;
+                            log("🎯 [BẮT TRÚNG MỤC TIÊU z.a] '" + tName + "' (ID=" + tId + ") Máu: " + tHp + "/" + tMaxHp + " tại (" + tx + "," + ty + ")");
+                            pushQuizStatus("🎯 Đã bắt trúng: '" + tName + "' (ID=" + tId + ") Máu: " + tMaxHp);
+                        }
+                    }
+                }
+            } catch (Exception ignore) {}
+        }
+
         if (now < quizNextTime) return;
+
+        // ƯU TIÊN TUYỆT ĐỐI #1: Nếu bảng thoại đang mở sẵn trên màn hình -> Không đổi khu, không di chuyển, bấm ngay!
+        String[] curOpenMenu = readDialogMenuItems();
+        String curOpenQ = readDialogQuestionText();
+        if ((curOpenMenu != null && curOpenMenu.length > 0) || (curOpenQ != null && !curOpenQ.trim().isEmpty())) {
+            if (quizStep < QUIZ_STEP_CLICK_START || quizStep == QUIZ_STEP_MOVE_MAP || quizStep == QUIZ_STEP_MOVE_NPC) {
+                int dlgNpcId = readDialogNpcId();
+                if (dlgNpcId != -999) this.quizNpcId = dlgNpcId;
+                System.out.println("[Quiz Debug] Bảng thoại NPC đang mở sẵn trên màn hình! (npcId=" + quizNpcId + "). Bắt đầu đọc menu/câu hỏi ngay...");
+                quizStep = QUIZ_STEP_CLICK_START;
+                quizNextTime = now + 100;
+                return;
+            }
+        }
 
         switch (quizStep) {
             case QUIZ_STEP_MOVE_MAP: {
                 int targetMap = getSettingInt("quiz_map", 86);
-                int targetZone = getSettingInt("quiz_zone", 0);
+                int targetZone = getSettingInt("quiz_zone", 0); // Mặc định luôn là Khu 0
                 int curMap = getMapAnToan();
                 int curZone = getCurrentZoneId();
 
@@ -15258,18 +15553,26 @@ public class TaskManager {
                     return;
                 }
 
-                // Kiểm tra và BẮT BUỘC đổi về đúng Khu 0 (khu duy nhất có Senju Tsunade di động)
-                if (curZone != targetZone && curZone >= 0) {
+                // Nếu chưa ở Khu 0 -> Chuyển sang đúng Khu 0 một lần duy nhất
+                if (curZone != targetZone && curZone > 0) {
                     log("Quiz: Dang o khu " + curZone + " -> chuyen sang khu " + targetZone);
-                    pushQuizStatus("Đang chuyển sang đúng Khu " + targetZone + " (Khu duy nhất có sự kiện)...");
-                    changeZoneNow(targetZone);
-                    quizNextTime = now + 3000;
+                    pushQuizStatus("Đang chuyển sang đúng Khu 0 (Khu duy nhất có sự kiện)...");
+                    try {
+                        Object packet = fmClass.getConstructor(byte.class).newInstance((byte) -7);
+                        Method writeByte = fmClass.getDeclaredMethod("s", int.class);
+                        writeByte.setAccessible(true);
+                        writeByte.invoke(packet, targetZone);
+                        Method send = fmClass.getDeclaredMethod("aG");
+                        send.setAccessible(true);
+                        send.invoke(packet);
+                    } catch (Exception ignore) {}
+                    quizNextTime = now + 2500;
                     return;
                 }
 
-                // Đã ở Map 86 và đúng Khu 0 -> Bắt đầu tìm kiếm NPC
+                // ĐÃ Ở ĐÚNG KHU 0 -> BẮT ĐẦU TÌM KIẾM NPC & TUYỆT ĐỐI KHÔNG ĐỔI KHU NỮA!
                 quizStep = QUIZ_STEP_MOVE_NPC;
-                quizNextTime = now + 300;
+                quizNextTime = now + 200;
                 break;
             }
 
@@ -15279,7 +15582,7 @@ public class TaskManager {
                 String curQ = readDialogQuestionText();
                 if ((curMenu != null && curMenu.length > 0) || (curQ != null && !curQ.trim().isEmpty())) {
                     int dlgNpcId = readDialogNpcId();
-                    if (dlgNpcId > 0) this.quizNpcId = dlgNpcId;
+                    if (dlgNpcId != -999) this.quizNpcId = dlgNpcId;
                     System.out.println("[Quiz Debug] Bảng thoại NPC đang mở sẵn trên màn hình! (npcId=" + quizNpcId + "). Bắt đầu đọc menu/câu hỏi ngay...");
                     quizStep = QUIZ_STEP_CLICK_START;
                     quizNextTime = now + 200;
@@ -15287,7 +15590,7 @@ public class TaskManager {
                 }
 
                 int[] dlg = detectDialog();
-                if (dlg != null && dlg[0] >= 0 && !quizIgnoredNpcIds.contains(Integer.valueOf(dlg[0]))) {
+                if (dlg != null && dlg[0] != -999 && !quizIgnoredNpcIds.contains(Integer.valueOf(dlg[0]))) {
                     this.quizNpcId = dlg[0];
                     quizStep = QUIZ_STEP_CLICK_START;
                     quizNextTime = now + 300;
@@ -15360,10 +15663,16 @@ public class TaskManager {
 
             case QUIZ_STEP_OPEN_NPC: {
                 if (quizNpcId > 0) {
-                    try { sendOpenNpc(quizNpcId); } catch (Exception ignore) {}
+                    try {
+                        Object targetObj = findNpcOnMapAnyVector(quizNpcId);
+                        if (targetObj != null && zFieldTarget != null) {
+                            zFieldTarget.set(getZ(), targetObj); // Khóa z.a vào con Sự Kiện!
+                        }
+                        sendOpenNpc(quizNpcId);
+                    } catch (Exception ignore) {}
                 }
                 quizStep = QUIZ_STEP_CLICK_START;
-                quizNextTime = now + 800;
+                quizNextTime = now + 600;
                 break;
             }
 
@@ -15380,6 +15689,8 @@ public class TaskManager {
                     if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "tra loi");
                     if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "bat dau");
                     if (startIdx < 0) startIdx = findMenuIndexByKeyword(menu, "câu hỏi");
+                    if (startIdx < 0 && menu.length == 1) startIdx = 0; // Nếu chỉ có 1 nút duy nhất -> Bấm luôn!
+
                     if (startIdx >= 0) {
                         // XÁC THỰC 100% ĐÍCH DANH NPC SỰ KIỆN -> LƯU ID CỐ ĐỊNH!
                         this.quizConfirmedEventNpcId = this.quizNpcId;
@@ -15387,26 +15698,26 @@ public class TaskManager {
                         System.out.println("[Quiz Console Log] -> Tim thay nut '" + menu[startIdx] + "' [index " + startIdx + "]. Dang bam...");
                         try { sendSelectMenu(quizNpcId, startIdx); } catch (Exception ignore) {}
                         quizStep = QUIZ_STEP_READ_QUESTION;
-                        quizNextTime = now + 800;
+                        quizNextTime = now + 600;
                         quizClickStartRetry = 0;
-                        return;
-                    } else {
-                        // BẢNG THOẠI CÓ MENU NHƯNG KHÔNG CÓ NÚT TRẮC NGHIỆM -> ĐÂY LÀ CON TSUNADE THƯỜNG / SAI!
-                        log("Quiz: Open NPC " + quizNpcId + " doesn't have Quiz menu -> Ignored wrong NPC & switching to the other Tsunade!");
-                        pushQuizStatus("Mở nhầm con Tsunade không có nút Trắc nghiệm (" + quizNpcId + ") -> Bỏ qua & đổi sang con khác...");
-                        quizIgnoredNpcIds.add(Integer.valueOf(quizNpcId));
-                        if (quizConfirmedEventNpcId == quizNpcId) quizConfirmedEventNpcId = -1;
-                        quizNpcId = -1;
-                        quizClickStartRetry = 0;
-                        closeCurrentDialog();
-                        closeAnyDialog();
-                        quizStep = QUIZ_STEP_MOVE_NPC;
-                        quizNextTime = now + 400;
                         return;
                     }
                 }
                 String qText = readDialogQuestionText();
                 if (qText != null && !qText.trim().isEmpty()) {
+                    String lowerQ = boDau(qText);
+                    // NẾU LÀ CÂU CHÀO "Xin chào ..." -> ĐÂY LÀ LỜI CHÀO, KHÔNG PHẢI CÂU HỎI TRẮC NGHIỆM!
+                    if (lowerQ.startsWith("xin chao") || lowerQ.contains("chao mung")) {
+                        if (menu != null && menu.length > 0) {
+                            try { sendSelectMenu(quizNpcId, 0); } catch (Exception ignore) {}
+                            quizStep = QUIZ_STEP_READ_QUESTION;
+                            quizNextTime = now + 600;
+                            return;
+                        }
+                        quizNextTime = now + 300;
+                        return;
+                    }
+
                     quizStep = QUIZ_STEP_READ_QUESTION;
                     quizNextTime = now + 300;
                     quizClickStartRetry = 0;
