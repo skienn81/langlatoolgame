@@ -26,7 +26,7 @@ namespace Manager
     public static class UpdateManager
     {
         // ── Phiên bản hiện tại của Tool ──────────────────────────────────────
-        public const string CURRENT_VERSION = "1.0.2";
+        public const string CURRENT_VERSION = "1.0.4";
         public const string GITHUB_REPO = "skienn81/langlatoolgame";
 
         private static readonly HttpClient _httpClient = new HttpClient();
@@ -220,6 +220,7 @@ namespace Manager
         public static void ApplyUpdateAndRestart(string zipPath)
         {
             string rootDir = GetToolRootDir();
+            string runningDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             string tempDir = Path.Combine(rootDir, "temp_update");
             if (!Directory.Exists(tempDir))
             {
@@ -231,6 +232,7 @@ namespace Manager
 
             string ps1Content = @"param (
     [string]$TargetDir,
+    [string]$RunningDir,
     [string]$ZipPath,
     [int]$WaitPid
 )
@@ -253,6 +255,14 @@ if ($WaitPid -gt 0) {
         }
     } catch {}
 }
+
+# Tắt các tiến trình java/javaw đang chạy client game để tránh lock client_modded.jar
+try {
+    Get-Process -Name 'java', 'javaw' -ErrorAction SilentlyContinue | ForEach-Object {
+        try { $_.Kill(); $_.WaitForExit(3000) } catch {}
+    }
+} catch {}
+
 Start-Sleep -Milliseconds 800
 
 # 2. Giải nén và ghi đè file
@@ -267,28 +277,46 @@ if (-not (Test-Path $ZipPath)) {
 
 try {
     $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
-    $total = $zip.Entries.Count
 
     foreach ($entry in $zip.Entries) {
         if ($entry.FullName.EndsWith('/') -or $entry.FullName.EndsWith('\')) {
             continue
         }
 
-        $destPath = [System.IO.Path]::Combine($TargetDir, $entry.FullName)
         $fileName = [System.IO.Path]::GetFileName($entry.FullName)
 
-        # BẢO VỆ DỮ LIỆU CÁ NHÂN: Không ghi đè config.json nếu đã tồn tại
-        if ($fileName -ieq 'config.json' -and (Test-Path $destPath)) {
-            continue
+        # Danh sách thư mục cần cập nhật: TargetDir và RunningDir (nếu khác nhau)
+        $dirsToUpdate = @($TargetDir)
+        if (![string]::IsNullOrWhiteSpace($RunningDir) -and ($RunningDir -ine $TargetDir) -and (Test-Path $RunningDir)) {
+            $dirsToUpdate += $RunningDir
         }
 
-        $destDir = [System.IO.Path]::GetDirectoryName($destPath)
-        if (-not (Test-Path $destDir)) {
-            [System.IO.Directory]::CreateDirectory($destDir) | Out-Null
-        }
+        foreach ($dir in $dirsToUpdate) {
+            $destPath = [System.IO.Path]::Combine($dir, $entry.FullName)
 
-        # Ghi đè file
-        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destPath, $true)
+            # BẢO VỆ DỮ LIỆU CÁ NHÂN: Không ghi đè config.json, telegram.cfg nếu đã tồn tại
+            if (($fileName -ieq 'config.json' -or $fileName -ieq 'telegram.cfg') -and (Test-Path $destPath)) {
+                continue
+            }
+
+            $destDir = [System.IO.Path]::GetDirectoryName($destPath)
+            if (-not (Test-Path $destDir)) {
+                [System.IO.Directory]::CreateDirectory($destDir) | Out-Null
+            }
+
+            # Retry ghi đè file phòng khi tiến trình Windows vừa nhả handle
+            $retryCount = 0
+            $extracted = $false
+            while (-not $extracted -and $retryCount -lt 5) {
+                try {
+                    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destPath, $true)
+                    $extracted = $true
+                } catch {
+                    $retryCount++
+                    Start-Sleep -Milliseconds 500
+                }
+            }
+        }
     }
     $zip.Dispose()
     Write-Host ""[3/4] Cập nhật file hoàn tất!"" -ForegroundColor Green
@@ -302,14 +330,20 @@ try {
 
 # 3. Khởi động lại Manager.exe
 Write-Host ""[4/4] Đang khởi động lại Manager.exe..."" -ForegroundColor Cyan
-$managerExe = [System.IO.Path]::Combine($TargetDir, 'Manager.exe')
-if (-not (Test-Path $managerExe)) {
+
+$managerExe = ''
+if (![string]::IsNullOrWhiteSpace($RunningDir) -and (Test-Path ([System.IO.Path]::Combine($RunningDir, 'Manager.exe')))) {
+    $managerExe = [System.IO.Path]::Combine($RunningDir, 'Manager.exe')
+} elseif (Test-Path ([System.IO.Path]::Combine($TargetDir, 'Manager.exe'))) {
+    $managerExe = [System.IO.Path]::Combine($TargetDir, 'Manager.exe')
+} else {
     $found = Get-ChildItem -Path $TargetDir -Filter 'Manager.exe' -Recurse | Select-Object -First 1
     if ($found) { $managerExe = $found.FullName }
 }
 
-if (Test-Path $managerExe) {
-    Start-Process -FilePath $managerExe -WorkingDirectory $TargetDir
+if (![string]::IsNullOrWhiteSpace($managerExe) -and (Test-Path $managerExe)) {
+    $workingDir = [System.IO.Path]::GetDirectoryName($managerExe)
+    Start-Process -FilePath $managerExe -WorkingDirectory $workingDir
 } else {
     Write-Host ""[CẢNH BÁO] Không tìm thấy file Manager.exe để mở lại."" -ForegroundColor Yellow
     Start-Sleep -Seconds 3
@@ -333,7 +367,7 @@ exit 0
             var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{updaterPs1Path}\" -TargetDir \"{rootDir}\" -ZipPath \"{zipPath}\" -WaitPid {currentPid}",
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{updaterPs1Path}\" -TargetDir \"{rootDir}\" -RunningDir \"{runningDir}\" -ZipPath \"{zipPath}\" -WaitPid {currentPid}",
                 UseShellExecute = true,
                 CreateNoWindow = false,
                 WindowStyle = ProcessWindowStyle.Normal,
